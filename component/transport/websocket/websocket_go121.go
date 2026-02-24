@@ -1,5 +1,5 @@
 //go:build go1.21
 
-package vmess
+package websocket
 
 const writeHeaderShouldFlush = true

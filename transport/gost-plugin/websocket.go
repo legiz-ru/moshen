@@ -6,7 +6,7 @@ import (
 
 	"github.com/metacubex/mihomo/component/ca"
 	"github.com/metacubex/mihomo/component/ech"
-	"github.com/metacubex/mihomo/transport/vmess"
+	ws "github.com/metacubex/mihomo/component/transport/websocket"
 
 	"github.com/metacubex/http"
 	"github.com/metacubex/smux"
@@ -52,7 +52,7 @@ func NewGostWebsocket(ctx context.Context, conn net.Conn, option *Option) (net.C
 		header.Add(k, v)
 	}
 
-	config := &vmess.WebsocketConfig{
+	config := &ws.Config{
 		Host:      option.Host,
 		Port:      option.Port,
 		Path:      option.Path,
@@ -82,7 +82,7 @@ func NewGostWebsocket(ctx context.Context, conn net.Conn, option *Option) (net.C
 		}
 	}
 
-	conn, err = vmess.StreamWebsocketConn(ctx, conn, config)
+	conn, err = ws.StreamConn(ctx, conn, config)
 	if err != nil {
 		return nil, err
 	}

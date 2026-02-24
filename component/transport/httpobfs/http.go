@@ -1,4 +1,4 @@
-package vmess
+package httpobfs
 
 import (
 	"bufio"
@@ -15,12 +15,12 @@ import (
 
 type httpConn struct {
 	net.Conn
-	cfg        *HTTPConfig
+	cfg        *Config
 	reader     *bufio.Reader
 	whandshake bool
 }
 
-type HTTPConfig struct {
+type Config struct {
 	Method  string
 	Host    string
 	Path    []string
@@ -84,7 +84,7 @@ func (hc *httpConn) Close() error {
 	return hc.Conn.Close()
 }
 
-func StreamHTTPConn(conn net.Conn, cfg *HTTPConfig) net.Conn {
+func StreamConn(conn net.Conn, cfg *Config) net.Conn {
 	return &httpConn{
 		Conn: conn,
 		cfg:  cfg,

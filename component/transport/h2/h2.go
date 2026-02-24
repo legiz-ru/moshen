@@ -1,4 +1,4 @@
-package vmess
+package h2
 
 import (
 	"context"
@@ -17,10 +17,10 @@ type h2Conn struct {
 	*http.Http2ClientConn
 	pwriter *io.PipeWriter
 	res     *http.Response
-	cfg     *H2Config
+	cfg     *Config
 }
 
-type H2Config struct {
+type Config struct {
 	Hosts []string
 	Path  string
 }
@@ -101,7 +101,7 @@ func (hc *h2Conn) Close() error {
 	return hc.Conn.Close()
 }
 
-func StreamH2Conn(ctx context.Context, conn net.Conn, cfg *H2Config) (_ net.Conn, err error) {
+func StreamConn(ctx context.Context, conn net.Conn, cfg *Config) (_ net.Conn, err error) {
 	if ctx.Done() != nil {
 		done := N.SetupContextForConn(ctx, conn)
 		defer done(&err)

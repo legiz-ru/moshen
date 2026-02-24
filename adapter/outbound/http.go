@@ -10,19 +10,17 @@ import (
 	"strconv"
 
 	N "github.com/metacubex/mihomo/common/net"
-	"github.com/metacubex/mihomo/component/ca"
+	shareTLS "github.com/metacubex/mihomo/component/transport/tls"
 	C "github.com/metacubex/mihomo/constant"
 
 	"github.com/metacubex/http"
-	"github.com/metacubex/tls"
 )
 
 type Http struct {
 	*Base
-	user      string
-	pass      string
-	tlsConfig *tls.Config
-	option    *HttpOption
+	user   string
+	pass   string
+	option *HttpOption
 }
 
 type HttpOption struct {
@@ -43,10 +41,16 @@ type HttpOption struct {
 
 // StreamConnContext implements C.ProxyAdapter
 func (h *Http) StreamConnContext(ctx context.Context, c net.Conn, metadata *C.Metadata) (net.Conn, error) {
-	if h.tlsConfig != nil {
-		cc := tls.Client(c, h.tlsConfig)
-		err := cc.HandshakeContext(ctx)
-		c = cc
+	if h.option.TLS {
+		var err error
+		c, err = shareTLS.StreamTLSConn(ctx, c, &shareTLS.Config{
+			Host:           h.option.SNI,
+			SkipCertVerify: h.option.SkipCertVerify,
+			FingerPrint:    h.option.Fingerprint,
+			Certificate:    h.option.Certificate,
+			PrivateKey:     h.option.PrivateKey,
+			NextProtos:     []string{"http/1.1"},
+		})
 		if err != nil {
 			return nil, fmt.Errorf("%s connect error: %w", h.addr, err)
 		}
@@ -145,25 +149,8 @@ func (h *Http) shakeHandContext(ctx context.Context, c net.Conn, metadata *C.Met
 }
 
 func NewHttp(option HttpOption) (*Http, error) {
-	var tlsConfig *tls.Config
-	if option.TLS {
-		sni := option.Server
-		if option.SNI != "" {
-			sni = option.SNI
-		}
-		var err error
-		tlsConfig, err = ca.GetTLSConfig(ca.Option{
-			TLSConfig: &tls.Config{
-				InsecureSkipVerify: option.SkipCertVerify,
-				ServerName:         sni,
-			},
-			Fingerprint: option.Fingerprint,
-			Certificate: option.Certificate,
-			PrivateKey:  option.PrivateKey,
-		})
-		if err != nil {
-			return nil, err
-		}
+	if option.SNI == "" {
+		option.SNI = option.Server
 	}
 
 	outbound := &Http{
@@ -178,10 +165,9 @@ func NewHttp(option HttpOption) (*Http, error) {
 			rmark:  option.RoutingMark,
 			prefer: option.IPVersion,
 		},
-		user:      option.UserName,
-		pass:      option.Password,
-		tlsConfig: tlsConfig,
-		option:    &option,
+		user:   option.UserName,
+		pass:   option.Password,
+		option: &option,
 	}
 	outbound.dialer = option.NewDialer(outbound.DialOptions())
 	return outbound, nil

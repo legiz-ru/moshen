@@ -8,9 +8,9 @@ import (
 
 	N "github.com/metacubex/mihomo/common/net"
 	"github.com/metacubex/mihomo/component/proxydialer"
+	shareTLS "github.com/metacubex/mihomo/component/transport/tls"
 	C "github.com/metacubex/mihomo/constant"
 	"github.com/metacubex/mihomo/transport/anytls"
-	"github.com/metacubex/mihomo/transport/vmess"
 
 	M "github.com/metacubex/sing/common/metadata"
 	"github.com/metacubex/sing/common/uot"
@@ -115,7 +115,7 @@ func NewAnyTLS(option AnyTLSOption) (*AnyTLS, error) {
 	if err != nil {
 		return nil, err
 	}
-	tlsConfig := &vmess.TLSConfig{
+	tlsConfig := &shareTLS.Config{
 		Host:              option.SNI,
 		SkipCertVerify:    option.SkipCertVerify,
 		NextProtos:        option.ALPN,

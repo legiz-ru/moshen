@@ -6,7 +6,7 @@ import (
 
 	"github.com/metacubex/mihomo/component/ca"
 	"github.com/metacubex/mihomo/component/ech"
-	"github.com/metacubex/mihomo/transport/vmess"
+	ws "github.com/metacubex/mihomo/component/transport/websocket"
 
 	"github.com/metacubex/http"
 	"github.com/metacubex/tls"
@@ -36,7 +36,7 @@ func NewV2rayObfs(ctx context.Context, conn net.Conn, option *Option) (net.Conn,
 		header.Add(k, v)
 	}
 
-	config := &vmess.WebsocketConfig{
+	config := &ws.Config{
 		Host:                     option.Host,
 		Port:                     option.Port,
 		Path:                     option.Path,
@@ -68,7 +68,7 @@ func NewV2rayObfs(ctx context.Context, conn net.Conn, option *Option) (net.Conn,
 		}
 	}
 
-	conn, err = vmess.StreamWebsocketConn(ctx, conn, config)
+	conn, err = ws.StreamConn(ctx, conn, config)
 	if err != nil {
 		return nil, err
 	}

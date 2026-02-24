@@ -9,9 +9,9 @@ import (
 	"time"
 
 	"github.com/metacubex/mihomo/common/buf"
+	shareTLS "github.com/metacubex/mihomo/component/transport/tls"
 	"github.com/metacubex/mihomo/transport/anytls/padding"
 	"github.com/metacubex/mihomo/transport/anytls/session"
-	"github.com/metacubex/mihomo/transport/vmess"
 
 	M "github.com/metacubex/sing/common/metadata"
 	N "github.com/metacubex/sing/common/network"
@@ -24,12 +24,12 @@ type ClientConfig struct {
 	MinIdleSession           int
 	Server                   M.Socksaddr
 	Dialer                   N.Dialer
-	TLSConfig                *vmess.TLSConfig
+	TLSConfig                *shareTLS.Config
 }
 
 type Client struct {
 	passwordSha256 []byte
-	tlsConfig      *vmess.TLSConfig
+	tlsConfig      *shareTLS.Config
 	dialer         N.Dialer
 	server         M.Socksaddr
 	sessionClient  *session.Client
@@ -82,7 +82,7 @@ func (c *Client) createOutboundTLSConnection(ctx context.Context) (net.Conn, err
 		b.WriteZeroN(paddingLen)
 	}
 
-	tlsConn, err := vmess.StreamTLSConn(ctx, conn, c.tlsConfig)
+	tlsConn, err := shareTLS.StreamTLSConn(ctx, conn, c.tlsConfig)
 	if err != nil {
 		conn.Close()
 		return nil, err

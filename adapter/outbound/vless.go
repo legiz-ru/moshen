@@ -12,11 +12,14 @@ import (
 	"github.com/metacubex/mihomo/component/ca"
 	"github.com/metacubex/mihomo/component/ech"
 	tlsC "github.com/metacubex/mihomo/component/tls"
+	"github.com/metacubex/mihomo/component/transport/h2"
+	"github.com/metacubex/mihomo/component/transport/httpobfs"
+	shareTLS "github.com/metacubex/mihomo/component/transport/tls"
+	ws "github.com/metacubex/mihomo/component/transport/websocket"
 	C "github.com/metacubex/mihomo/constant"
 	"github.com/metacubex/mihomo/transport/gun"
 	"github.com/metacubex/mihomo/transport/vless"
 	"github.com/metacubex/mihomo/transport/vless/encryption"
-	"github.com/metacubex/mihomo/transport/vmess"
 
 	"github.com/metacubex/http"
 	vmessSing "github.com/metacubex/sing-vmess"
@@ -75,7 +78,7 @@ func (v *Vless) StreamConnContext(ctx context.Context, c net.Conn, metadata *C.M
 	switch v.option.Network {
 	case "ws":
 		host, port, _ := net.SplitHostPort(v.addr)
-		wsOpts := &vmess.WebsocketConfig{
+		wsOpts := &ws.Config{
 			Host:                     host,
 			Port:                     port,
 			Path:                     v.option.WSOpts.Path,
@@ -86,6 +89,9 @@ func (v *Vless) StreamConnContext(ctx context.Context, c net.Conn, metadata *C.M
 			ClientFingerprint:        v.option.ClientFingerprint,
 			ECHConfig:                v.echConfig,
 			Headers:                  http.Header{},
+			// ✨ 修复：WebSocket 传入证书以支持 mTLS
+			Certificate: v.option.Certificate,
+			PrivateKey:  v.option.PrivateKey,
 		}
 
 		if len(v.option.WSOpts.Headers) != 0 {
@@ -121,40 +127,38 @@ func (v *Vless) StreamConnContext(ctx context.Context, c net.Conn, metadata *C.M
 				convert.SetUserAgent(wsOpts.Headers)
 			}
 		}
-		c, err = vmess.StreamWebsocketConn(ctx, c, wsOpts)
+		c, err = ws.StreamConn(ctx, c, wsOpts)
 	case "http":
-		// readability first, so just copy default TLS logic
 		c, err = v.streamTLSConn(ctx, c, false)
 		if err != nil {
 			return nil, err
 		}
 
 		host, _, _ := net.SplitHostPort(v.addr)
-		httpOpts := &vmess.HTTPConfig{
+		httpOpts := &httpobfs.Config{
 			Host:    host,
 			Method:  v.option.HTTPOpts.Method,
 			Path:    v.option.HTTPOpts.Path,
 			Headers: v.option.HTTPOpts.Headers,
 		}
 
-		c = vmess.StreamHTTPConn(c, httpOpts)
+		c = httpobfs.StreamConn(c, httpOpts)
 	case "h2":
 		c, err = v.streamTLSConn(ctx, c, true)
 		if err != nil {
 			return nil, err
 		}
 
-		h2Opts := &vmess.H2Config{
+		h2Opts := &h2.Config{
 			Hosts: v.option.HTTP2Opts.Host,
 			Path:  v.option.HTTP2Opts.Path,
 		}
 
-		c, err = vmess.StreamH2Conn(ctx, c, h2Opts)
+		c, err = h2.StreamConn(ctx, c, h2Opts)
 	case "grpc":
-		c, err = gun.StreamGunWithConn(c, v.gunTLSConfig, v.gunConfig, v.echConfig, v.realityConfig)
+		// ✨ 修复：gRPC 传入证书以支持 mTLS
+		c, err = gun.StreamGunWithConn(c, v.gunTLSConfig, v.gunConfig, v.option.Certificate, v.option.PrivateKey, v.echConfig, v.realityConfig)
 	default:
-		// default tcp network
-		// handle TLS
 		c, err = v.streamTLSConn(ctx, c, false)
 	}
 
@@ -204,7 +208,7 @@ func (v *Vless) streamTLSConn(ctx context.Context, conn net.Conn, isH2 bool) (ne
 	if v.option.TLS {
 		host, _, _ := net.SplitHostPort(v.addr)
 
-		tlsOpts := vmess.TLSConfig{
+		tlsOpts := shareTLS.Config{
 			Host:              host,
 			SkipCertVerify:    v.option.SkipCertVerify,
 			FingerPrint:       v.option.Fingerprint,
@@ -224,7 +228,7 @@ func (v *Vless) streamTLSConn(ctx context.Context, conn net.Conn, isH2 bool) (ne
 			tlsOpts.Host = v.option.ServerName
 		}
 
-		return vmess.StreamTLSConn(ctx, conn, &tlsOpts)
+		return shareTLS.StreamTLSConn(ctx, conn, &tlsOpts)
 	}
 
 	return conn, nil
@@ -270,12 +274,25 @@ func (v *Vless) ListenPacketContext(ctx context.Context, metadata *C.Metadata) (
 	if err = v.ResolveUDP(ctx, metadata); err != nil {
 		return nil, err
 	}
+	if v.splitHTTPTransport != nil {
+		c, err := v.splitHTTPTransport.DialContext(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("splithttp connect error: %v", err)
+		}
+		defer func(c net.Conn) { safeConnClose(c, err) }(c)
+
+		c, err = v.streamConnContext(ctx, c, metadata)
+		if err != nil {
+			return nil, fmt.Errorf("new vless client error: %v", err)
+		}
+		return v.ListenPacketOnStreamConn(ctx, c, metadata)
+	}
 	var c net.Conn
 	// gun transport
 	if v.transport != nil {
 		c, err = gun.StreamGunWithTransport(v.transport, v.gunConfig)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("%s connect error: %w", v.addr, err)
 		}
 		defer func(c net.Conn) {
 			safeConnClose(c, err)
@@ -492,7 +509,8 @@ func NewVless(option VlessOption) (*Vless, error) {
 		v.gunTLSConfig = tlsConfig
 		v.gunConfig = gunConfig
 
-		v.transport = gun.NewHTTP2Client(dialFn, tlsConfig, v.option.ClientFingerprint, v.echConfig, v.realityConfig)
+		// ✨ 修复：gRPC 传入证书以支持 mTLS
+		v.transport = gun.NewHTTP2Client(dialFn, tlsConfig, v.option.ClientFingerprint, v.option.Certificate, v.option.PrivateKey, v.echConfig, v.realityConfig)
 	}
 
 	return v, nil

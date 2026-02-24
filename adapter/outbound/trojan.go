@@ -11,11 +11,12 @@ import (
 	"github.com/metacubex/mihomo/component/ca"
 	"github.com/metacubex/mihomo/component/ech"
 	tlsC "github.com/metacubex/mihomo/component/tls"
+	shareTLS "github.com/metacubex/mihomo/component/transport/tls"
+	ws "github.com/metacubex/mihomo/component/transport/websocket"
 	C "github.com/metacubex/mihomo/constant"
 	"github.com/metacubex/mihomo/transport/gun"
 	"github.com/metacubex/mihomo/transport/shadowsocks/core"
 	"github.com/metacubex/mihomo/transport/trojan"
-	"github.com/metacubex/mihomo/transport/vmess"
 
 	"github.com/metacubex/http"
 	"github.com/metacubex/tls"
@@ -72,7 +73,7 @@ func (t *Trojan) StreamConnContext(ctx context.Context, c net.Conn, metadata *C.
 	case "ws":
 		host, port, _ := net.SplitHostPort(t.addr)
 
-		wsOpts := &vmess.WebsocketConfig{
+		wsOpts := &ws.Config{
 			Host:                     host,
 			Port:                     port,
 			Path:                     t.option.WSOpts.Path,
@@ -83,6 +84,9 @@ func (t *Trojan) StreamConnContext(ctx context.Context, c net.Conn, metadata *C.
 			ClientFingerprint:        t.option.ClientFingerprint,
 			ECHConfig:                t.echConfig,
 			Headers:                  http.Header{},
+			// ✨ 修复：为 WebSocket 配置传入证书信息
+			Certificate: t.option.Certificate,
+			PrivateKey:  t.option.PrivateKey,
 		}
 
 		if t.option.SNI != "" {
@@ -100,43 +104,46 @@ func (t *Trojan) StreamConnContext(ctx context.Context, c net.Conn, metadata *C.
 			alpn = t.option.ALPN
 		}
 
-		wsOpts.TLS = true
-		wsOpts.TLSConfig, err = ca.GetTLSConfig(ca.Option{
-			TLSConfig: &tls.Config{
-				NextProtos:         alpn,
-				MinVersion:         tls.VersionTLS12,
-				InsecureSkipVerify: t.option.SkipCertVerify,
-				ServerName:         t.option.SNI,
-			},
-			Fingerprint: t.option.Fingerprint,
-			Certificate: t.option.Certificate,
-			PrivateKey:  t.option.PrivateKey,
-		})
-		if err != nil {
-			return nil, err
+		if t.option.TLS {
+			wsOpts.TLS = true
+			wsOpts.TLSConfig, err = ca.GetTLSConfig(ca.Option{
+				TLSConfig: &tls.Config{
+					NextProtos:         alpn,
+					MinVersion:         tls.VersionTLS12,
+					InsecureSkipVerify: t.option.SkipCertVerify,
+					ServerName:         t.option.SNI,
+				},
+				Fingerprint: t.option.Fingerprint,
+				Certificate: t.option.Certificate,
+				PrivateKey:  t.option.PrivateKey,
+			})
+			if err != nil {
+				return nil, err
+			}
 		}
 
-		c, err = vmess.StreamWebsocketConn(ctx, c, wsOpts)
+		c, err = ws.StreamConn(ctx, c, wsOpts)
 	case "grpc":
-		c, err = gun.StreamGunWithConn(c, t.gunTLSConfig, t.gunConfig, t.echConfig, t.realityConfig)
+		// ✨ 修复：为 gRPC 配置传入证书信息
+		c, err = gun.StreamGunWithConn(c, t.gunTLSConfig, t.gunConfig, t.option.Certificate, t.option.PrivateKey, t.echConfig, t.realityConfig)
 	default:
-		// default tcp network
-		// handle TLS
-		alpn := trojan.DefaultALPN
-		if t.option.ALPN != nil { // structure's Decode will ensure value not nil when input has value even it was set an empty array
-			alpn = t.option.ALPN
+		if t.option.TLS {
+			alpn := trojan.DefaultALPN
+			if t.option.ALPN != nil { // structure's Decode will ensure value not nil when input has value even it was set an empty array
+				alpn = t.option.ALPN
+			}
+			c, err = shareTLS.StreamTLSConn(ctx, c, &shareTLS.Config{
+				Host:              t.option.SNI,
+				SkipCertVerify:    t.option.SkipCertVerify,
+				FingerPrint:       t.option.Fingerprint,
+				Certificate:       t.option.Certificate,
+				PrivateKey:        t.option.PrivateKey,
+				ClientFingerprint: t.option.ClientFingerprint,
+				NextProtos:        alpn,
+				ECH:               t.echConfig,
+				Reality:           t.realityConfig,
+			})
 		}
-		c, err = vmess.StreamTLSConn(ctx, c, &vmess.TLSConfig{
-			Host:              t.option.SNI,
-			SkipCertVerify:    t.option.SkipCertVerify,
-			FingerPrint:       t.option.Fingerprint,
-			Certificate:       t.option.Certificate,
-			PrivateKey:        t.option.PrivateKey,
-			ClientFingerprint: t.option.ClientFingerprint,
-			NextProtos:        alpn,
-			ECH:               t.echConfig,
-			Reality:           t.realityConfig,
-		})
 	}
 	if err != nil {
 		return nil, fmt.Errorf("%s connect error: %w", t.addr, err)
@@ -351,7 +358,8 @@ func NewTrojan(option TrojanOption) (*Trojan, error) {
 			return nil, err
 		}
 
-		t.transport = gun.NewHTTP2Client(dialFn, tlsConfig, option.ClientFingerprint, t.echConfig, t.realityConfig)
+		// ✨ 修复：增加证书参数传递
+		t.transport = gun.NewHTTP2Client(dialFn, tlsConfig, option.ClientFingerprint, option.Certificate, option.PrivateKey, t.echConfig, t.realityConfig)
 
 		t.gunTLSConfig = tlsConfig
 		t.gunConfig = &gun.Config{

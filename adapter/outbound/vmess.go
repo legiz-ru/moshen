@@ -14,10 +14,13 @@ import (
 	"github.com/metacubex/mihomo/component/ca"
 	"github.com/metacubex/mihomo/component/ech"
 	tlsC "github.com/metacubex/mihomo/component/tls"
+	"github.com/metacubex/mihomo/component/transport/h2"
+	"github.com/metacubex/mihomo/component/transport/httpobfs"
+	shareTLS "github.com/metacubex/mihomo/component/transport/tls"
+	ws "github.com/metacubex/mihomo/component/transport/websocket"
 	C "github.com/metacubex/mihomo/constant"
 	"github.com/metacubex/mihomo/ntp"
 	"github.com/metacubex/mihomo/transport/gun"
-	mihomoVMess "github.com/metacubex/mihomo/transport/vmess"
 
 	"github.com/metacubex/http"
 	vmess "github.com/metacubex/sing-vmess"
@@ -103,7 +106,7 @@ func (v *Vmess) StreamConnContext(ctx context.Context, c net.Conn, metadata *C.M
 	switch v.option.Network {
 	case "ws":
 		host, port, _ := net.SplitHostPort(v.addr)
-		wsOpts := &mihomoVMess.WebsocketConfig{
+		wsOpts := &ws.Config{
 			Host:                     host,
 			Port:                     port,
 			Path:                     v.option.WSOpts.Path,
@@ -114,6 +117,9 @@ func (v *Vmess) StreamConnContext(ctx context.Context, c net.Conn, metadata *C.M
 			ClientFingerprint:        v.option.ClientFingerprint,
 			ECHConfig:                v.echConfig,
 			Headers:                  http.Header{},
+			// ✨ 修复：WebSocket 传入证书以支持 mTLS
+			Certificate: v.option.Certificate,
+			PrivateKey:  v.option.PrivateKey,
 		}
 
 		if len(v.option.WSOpts.Headers) != 0 {
@@ -144,15 +150,17 @@ func (v *Vmess) StreamConnContext(ctx context.Context, c net.Conn, metadata *C.M
 				wsOpts.TLSConfig.ServerName = host
 			}
 		}
-		c, err = mihomoVMess.StreamWebsocketConn(ctx, c, wsOpts)
+		c, err = ws.StreamConn(ctx, c, wsOpts)
 	case "http":
 		// readability first, so just copy default TLS logic
 		if v.option.TLS {
 			host, _, _ := net.SplitHostPort(v.addr)
-			tlsOpts := &mihomoVMess.TLSConfig{
+			tlsOpts := &shareTLS.Config{
 				Host:              host,
 				SkipCertVerify:    v.option.SkipCertVerify,
 				ClientFingerprint: v.option.ClientFingerprint,
+				Certificate:       v.option.Certificate,
+				PrivateKey:        v.option.PrivateKey,
 				ECH:               v.echConfig,
 				Reality:           v.realityConfig,
 				NextProtos:        v.option.ALPN,
@@ -161,24 +169,24 @@ func (v *Vmess) StreamConnContext(ctx context.Context, c net.Conn, metadata *C.M
 			if v.option.ServerName != "" {
 				tlsOpts.Host = v.option.ServerName
 			}
-			c, err = mihomoVMess.StreamTLSConn(ctx, c, tlsOpts)
+			c, err = shareTLS.StreamTLSConn(ctx, c, tlsOpts)
 			if err != nil {
 				return nil, err
 			}
 		}
 
 		host, _, _ := net.SplitHostPort(v.addr)
-		httpOpts := &mihomoVMess.HTTPConfig{
+		httpOpts := &httpobfs.Config{
 			Host:    host,
 			Method:  v.option.HTTPOpts.Method,
 			Path:    v.option.HTTPOpts.Path,
 			Headers: v.option.HTTPOpts.Headers,
 		}
 
-		c = mihomoVMess.StreamHTTPConn(c, httpOpts)
+		c = httpobfs.StreamConn(c, httpOpts)
 	case "h2":
 		host, _, _ := net.SplitHostPort(v.addr)
-		tlsOpts := mihomoVMess.TLSConfig{
+		tlsOpts := shareTLS.Config{
 			Host:              host,
 			SkipCertVerify:    v.option.SkipCertVerify,
 			FingerPrint:       v.option.Fingerprint,
@@ -193,24 +201,25 @@ func (v *Vmess) StreamConnContext(ctx context.Context, c net.Conn, metadata *C.M
 			tlsOpts.Host = v.option.ServerName
 		}
 
-		c, err = mihomoVMess.StreamTLSConn(ctx, c, &tlsOpts)
+		c, err = shareTLS.StreamTLSConn(ctx, c, &tlsOpts)
 		if err != nil {
 			return nil, err
 		}
 
-		h2Opts := &mihomoVMess.H2Config{
+		h2Opts := &h2.Config{
 			Hosts: v.option.HTTP2Opts.Host,
 			Path:  v.option.HTTP2Opts.Path,
 		}
 
-		c, err = mihomoVMess.StreamH2Conn(ctx, c, h2Opts)
+		c, err = h2.StreamConn(ctx, c, h2Opts)
 	case "grpc":
-		c, err = gun.StreamGunWithConn(c, v.gunTLSConfig, v.gunConfig, v.echConfig, v.realityConfig)
+		// ✨ 修复：gRPC 传入证书以支持 mTLS
+		c, err = gun.StreamGunWithConn(c, v.gunTLSConfig, v.gunConfig, v.option.Certificate, v.option.PrivateKey, v.echConfig, v.realityConfig)
 	default:
 		// handle TLS
 		if v.option.TLS {
 			host, _, _ := net.SplitHostPort(v.addr)
-			tlsOpts := &mihomoVMess.TLSConfig{
+			tlsOpts := &shareTLS.Config{
 				Host:              host,
 				SkipCertVerify:    v.option.SkipCertVerify,
 				FingerPrint:       v.option.Fingerprint,
@@ -226,7 +235,7 @@ func (v *Vmess) StreamConnContext(ctx context.Context, c net.Conn, metadata *C.M
 				tlsOpts.Host = v.option.ServerName
 			}
 
-			c, err = mihomoVMess.StreamTLSConn(ctx, c, tlsOpts)
+			c, err = shareTLS.StreamTLSConn(ctx, c, tlsOpts)
 		}
 	}
 
@@ -498,7 +507,8 @@ func NewVmess(option VmessOption) (*Vmess, error) {
 		v.gunTLSConfig = tlsConfig
 		v.gunConfig = gunConfig
 
-		v.transport = gun.NewHTTP2Client(dialFn, tlsConfig, v.option.ClientFingerprint, v.echConfig, v.realityConfig)
+		// ✨ 修复：传递证书以支持 mTLS
+		v.transport = gun.NewHTTP2Client(dialFn, tlsConfig, v.option.ClientFingerprint, v.option.Certificate, v.option.PrivateKey, v.echConfig, v.realityConfig)
 	}
 
 	return v, nil
