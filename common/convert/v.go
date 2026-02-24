@@ -1,6 +1,7 @@
 package convert
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/url"
@@ -141,6 +142,110 @@ func handleVShareLink(names map[string]int, url *url.URL, scheme string, proxy m
 		grpcOpts := make(map[string]any)
 		grpcOpts["grpc-service-name"] = query.Get("serviceName")
 		proxy["grpc-opts"] = grpcOpts
+
+	case "xhttp", "splithttp":
+		proxy["network"] = "xhttp"
+		splithttpOpts := make(map[string]any)
+		if path := query.Get("path"); path != "" {
+			splithttpOpts["path"] = path
+		}
+		if host := query.Get("host"); host != "" {
+			splithttpOpts["host"] = host
+		}
+		if mode := query.Get("mode"); mode != "" {
+			splithttpOpts["mode"] = mode
+		}
+		if extra := query.Get("extra"); extra != "" {
+			var extraMap map[string]any
+			if err := json.Unmarshal([]byte(extra), &extraMap); err == nil {
+				parseSplitHTTPExtra(extraMap, splithttpOpts)
+			}
+		}
+		proxy["splithttp-opts"] = splithttpOpts
 	}
 	return nil
+}
+
+// parseRangeConfig converts an xray-core extra JSON value to a mihomo RangeConfig map.
+// The value may be a number (e.g. 1000000), a "min-max" string (e.g. "16-32"),
+// or a plain number string (e.g. "30").
+func parseRangeConfig(v any) map[string]any {
+	switch val := v.(type) {
+	case float64:
+		n := int32(val)
+		return map[string]any{"from": n, "to": n}
+	case string:
+		if parts := strings.SplitN(val, "-", 2); len(parts) == 2 {
+			from, err1 := strconv.ParseInt(parts[0], 10, 32)
+			to, err2 := strconv.ParseInt(parts[1], 10, 32)
+			if err1 == nil && err2 == nil {
+				return map[string]any{"from": int32(from), "to": int32(to)}
+			}
+		}
+		if n, err := strconv.ParseInt(val, 10, 32); err == nil {
+			return map[string]any{"from": int32(n), "to": int32(n)}
+		}
+	}
+	return nil
+}
+
+// parseSplitHTTPExtra maps xray-core camelCase extra fields to mihomo splithttp-opts fields.
+func parseSplitHTTPExtra(extra map[string]any, opts map[string]any) {
+	if v, ok := extra["noGRPCHeader"].(bool); ok && v {
+		opts["no-grpc-header"] = true
+	}
+	if v, ok := extra["xPaddingBytes"]; ok {
+		if rc := parseRangeConfig(v); rc != nil {
+			opts["x-padding-bytes"] = rc
+		}
+	}
+	if v, ok := extra["scMaxEachPostBytes"]; ok {
+		if rc := parseRangeConfig(v); rc != nil {
+			opts["max-each-post-bytes"] = rc
+		}
+	}
+	if v, ok := extra["scMinPostsIntervalMs"]; ok {
+		if rc := parseRangeConfig(v); rc != nil {
+			opts["min-posts-interval"] = rc
+		}
+	}
+	if v, ok := extra["scStreamUpServerSecs"]; ok {
+		if rc := parseRangeConfig(v); rc != nil {
+			opts["stream-up-server-secs"] = rc
+		}
+	}
+	if xmuxAny, ok := extra["xmux"].(map[string]any); ok {
+		xmuxOpts := make(map[string]any)
+		if v, ok := xmuxAny["maxConcurrency"]; ok {
+			if rc := parseRangeConfig(v); rc != nil {
+				xmuxOpts["max-concurrency"] = rc
+			}
+		}
+		if v, ok := xmuxAny["maxConnections"]; ok {
+			if rc := parseRangeConfig(v); rc != nil {
+				xmuxOpts["max-connections"] = rc
+			}
+		}
+		if v, ok := xmuxAny["cMaxReuseTimes"]; ok {
+			if rc := parseRangeConfig(v); rc != nil {
+				xmuxOpts["c-max-reuse-times"] = rc
+			}
+		}
+		if v, ok := xmuxAny["hMaxRequestTimes"]; ok {
+			if rc := parseRangeConfig(v); rc != nil {
+				xmuxOpts["h-max-request-times"] = rc
+			}
+		}
+		if v, ok := xmuxAny["hMaxReusableSecs"]; ok {
+			if rc := parseRangeConfig(v); rc != nil {
+				xmuxOpts["h-max-reusable-secs"] = rc
+			}
+		}
+		if v, ok := xmuxAny["hKeepAlivePeriod"].(float64); ok && v != 0 {
+			xmuxOpts["h-keep-alive-period"] = int64(v)
+		}
+		if len(xmuxOpts) > 0 {
+			opts["xmux"] = xmuxOpts
+		}
+	}
 }
