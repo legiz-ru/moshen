@@ -1,0 +1,68 @@
+name: Build and Push to GHCR
+
+on:
+  push:
+    branches:
+      - Alpha
+      - feat/splithttp
+  workflow_dispatch:
+  schedule:
+    - cron: "0 0 * * *" # 每天午夜触发一次
+
+env:
+  IMAGE_NAME: ${{ github.event.repository.name }}
+  IMAGE_REGISTRY: ghcr.io/${{ github.repository_owner }}
+  REGISTRY_USER: ${{ github.actor }}
+  REGISTRY_PASSWORD: ${{ github.token }}
+
+jobs:
+  push-ghcr:
+    name: Build and push multi-platform image
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # ✨ 核心修复：清洗分支名
+      # 理由：Docker Tag 不允许包含斜杠 (/)，需转换为 ( - )
+      # 示例：feat/splithttp -> feat-splithttp
+      - name: Sanitize tag name
+        id: sanitize
+        run: |
+          SAFE_REF=$(echo "${{ github.ref_name }}" | sed 's/\//-/g')
+          echo "SAFE_REF=$SAFE_REF" >> $GITHUB_ENV
+          echo "Sanitized tag: $SAFE_REF"
+
+      - name: Install qemu dependency
+        uses: docker/setup-qemu-action@v3
+
+      - name: Build Image
+        id: build_image_multiplatform
+        uses: redhat-actions/buildah-build@v2
+        with:
+          image: ${{ env.IMAGE_NAME }}
+          # 使用清洗后的环境变量 ${{ env.SAFE_REF }}
+          tags: latest ${{ env.SAFE_REF }} ${{ github.sha }}
+          platforms: linux/amd64, linux/arm64
+          containerfiles: |
+            ./Dockerfile
+
+      - name: Push To GHCR
+        uses: redhat-actions/push-to-registry@v2
+        with:
+          image: ${{ steps.build_image_multiplatform.outputs.image }}
+          tags: ${{ steps.build_image_multiplatform.outputs.tags }}
+          registry: ${{ env.IMAGE_REGISTRY }}
+          username: ${{ env.REGISTRY_USER }}
+          password: ${{ env.REGISTRY_PASSWORD }}
+
+      - name: Echo image details
+        run: |
+          echo "Image: ${{ steps.build_image_multiplatform.outputs.image }}"
+          echo "Tags: ${{ steps.build_image_multiplatform.outputs.tags }}"
+          echo "Registry: ${{ env.IMAGE_REGISTRY }}"
