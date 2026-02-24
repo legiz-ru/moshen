@@ -11,16 +11,17 @@ import (
 
 type VmessOption struct {
 	BaseOption
-	Users           []VmessUser   `inbound:"users"`
-	WsPath          string        `inbound:"ws-path,omitempty"`
-	GrpcServiceName string        `inbound:"grpc-service-name,omitempty"`
-	Certificate     string        `inbound:"certificate,omitempty"`
-	PrivateKey      string        `inbound:"private-key,omitempty"`
-	ClientAuthType  string        `inbound:"client-auth-type,omitempty"`
-	ClientAuthCert  string        `inbound:"client-auth-cert,omitempty"`
-	EchKey          string        `inbound:"ech-key,omitempty"`
-	RealityConfig   RealityConfig `inbound:"reality-config,omitempty"`
-	MuxOption       MuxOption     `inbound:"mux-option,omitempty"`
+	Users           []VmessUser      `inbound:"users"`
+	WsPath          string           `inbound:"ws-path,omitempty"`
+	SplitHTTP       SplitHTTPOptions `inbound:"splithttp-opts,omitempty"`
+	GrpcServiceName string           `inbound:"grpc-service-name,omitempty"`
+	Certificate     string           `inbound:"certificate,omitempty"`
+	PrivateKey      string           `inbound:"private-key,omitempty"`
+	ClientAuthType  string           `inbound:"client-auth-type,omitempty"`
+	ClientAuthCert  string           `inbound:"client-auth-cert,omitempty"`
+	EchKey          string           `inbound:"ech-key,omitempty"`
+	RealityConfig   RealityConfig    `inbound:"reality-config,omitempty"`
+	MuxOption       MuxOption        `inbound:"mux-option,omitempty"`
 }
 
 type VmessUser struct {
@@ -61,6 +62,7 @@ func NewVmess(options *VmessOption) (*Vmess, error) {
 			Listen:          base.RawAddress(),
 			Users:           users,
 			WsPath:          options.WsPath,
+			SplitHTTP:       options.SplitHTTP.Build(),
 			GrpcServiceName: options.GrpcServiceName,
 			Certificate:     options.Certificate,
 			PrivateKey:      options.PrivateKey,

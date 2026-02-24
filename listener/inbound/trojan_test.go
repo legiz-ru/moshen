@@ -17,8 +17,10 @@ func testInboundTrojan(t *testing.T, inboundOptions inbound.TrojanOption, outbou
 		Listen:  "127.0.0.1",
 		Port:    "0",
 	}
-	inboundOptions.Users = []inbound.TrojanUser{
-		{Username: "test", Password: userUUID},
+	if len(inboundOptions.Users) == 0 {
+		inboundOptions.Users = []inbound.TrojanUser{
+			{Username: "test", Password: userUUID},
+		}
 	}
 	in, err := inbound.NewTrojan(&inboundOptions)
 	if !assert.NoError(t, err) {
@@ -99,6 +101,7 @@ func TestInboundTrojan_TLS(t *testing.T) {
 		PrivateKey:  tlsPrivateKey,
 	}
 	outboundOptions := outbound.TrojanOption{
+		TLS:         true,
 		Fingerprint: tlsFingerprint,
 	}
 	testInboundTrojanTLS(t, inboundOptions, outboundOptions)
@@ -111,6 +114,7 @@ func TestInboundTrojan_Wss1(t *testing.T) {
 		WsPath:      "/ws",
 	}
 	outboundOptions := outbound.TrojanOption{
+		TLS:         true,
 		Fingerprint: tlsFingerprint,
 		Network:     "ws",
 		WSOpts: outbound.WSOptions{
@@ -128,6 +132,7 @@ func TestInboundTrojan_Wss2(t *testing.T) {
 		GrpcServiceName: "GunService",
 	}
 	outboundOptions := outbound.TrojanOption{
+		TLS:         true,
 		Fingerprint: tlsFingerprint,
 		Network:     "ws",
 		WSOpts: outbound.WSOptions{
@@ -144,6 +149,7 @@ func TestInboundTrojan_Grpc1(t *testing.T) {
 		GrpcServiceName: "GunService",
 	}
 	outboundOptions := outbound.TrojanOption{
+		TLS:         true,
 		Fingerprint: tlsFingerprint,
 		Network:     "grpc",
 		GrpcOpts:    outbound.GrpcOptions{GrpcServiceName: "GunService"},
@@ -159,6 +165,7 @@ func TestInboundTrojan_Grpc2(t *testing.T) {
 		GrpcServiceName: "GunService",
 	}
 	outboundOptions := outbound.TrojanOption{
+		TLS:         true,
 		Fingerprint: tlsFingerprint,
 		Network:     "grpc",
 		GrpcOpts:    outbound.GrpcOptions{GrpcServiceName: "GunService"},
@@ -176,6 +183,7 @@ func TestInboundTrojan_Reality(t *testing.T) {
 		},
 	}
 	outboundOptions := outbound.TrojanOption{
+		TLS: true,
 		SNI: realityDest,
 		RealityOpts: outbound.RealityOptions{
 			PublicKey: realityPublickey,
@@ -197,6 +205,7 @@ func TestInboundTrojan_Reality_Grpc(t *testing.T) {
 		GrpcServiceName: "GunService",
 	}
 	outboundOptions := outbound.TrojanOption{
+		TLS: true,
 		SNI: realityDest,
 		RealityOpts: outbound.RealityOptions{
 			PublicKey: realityPublickey,
@@ -220,6 +229,7 @@ func TestInboundTrojan_TLS_TrojanSS(t *testing.T) {
 		},
 	}
 	outboundOptions := outbound.TrojanOption{
+		TLS:         true,
 		Fingerprint: tlsFingerprint,
 		SSOpts: outbound.TrojanSSOption{
 			Enabled:  true,
@@ -242,6 +252,7 @@ func TestInboundTrojan_Wss_TrojanSS(t *testing.T) {
 		WsPath: "/ws",
 	}
 	outboundOptions := outbound.TrojanOption{
+		TLS:         true,
 		Fingerprint: tlsFingerprint,
 		SSOpts: outbound.TrojanSSOption{
 			Enabled:  true,
@@ -254,4 +265,34 @@ func TestInboundTrojan_Wss_TrojanSS(t *testing.T) {
 		},
 	}
 	testInboundTrojanTLS(t, inboundOptions, outboundOptions)
+}
+
+func TestInboundTrojan_SplitHTTP_Integration(t *testing.T) {
+	t.Run("Plain-XHTTP-CaddyMode", func(t *testing.T) {
+		inboundOptions := inbound.TrojanOption{
+			SplitHTTP: inbound.SplitHTTPOptions{Path: "/x"},
+		}
+		outboundOptions := outbound.TrojanOption{
+			Network:       "splithttp",
+			TLS:           false,
+			SplitHTTPOpts: outbound.SplitHTTPOptions{Path: "/x", Mode: "packet-up"},
+		}
+		testInboundTrojan(t, inboundOptions, outboundOptions)
+	})
+
+	t.Run("TLS-XHTTP", func(t *testing.T) {
+		inboundOptions := inbound.TrojanOption{
+			Certificate: tlsCertificate,
+			PrivateKey:  tlsPrivateKey,
+			SplitHTTP:   inbound.SplitHTTPOptions{Path: "/x"},
+		}
+		outboundOptions := outbound.TrojanOption{
+			TLS:           true,
+			Fingerprint:   tlsFingerprint,
+			ALPN:          []string{"h2"},
+			Network:       "splithttp",
+			SplitHTTPOpts: outbound.SplitHTTPOptions{Path: "/x", Mode: "packet-up"},
+		}
+		testInboundTrojan(t, inboundOptions, outboundOptions)
+	})
 }

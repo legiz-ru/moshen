@@ -18,8 +18,10 @@ func testInboundVless(t *testing.T, inboundOptions inbound.VlessOption, outbound
 		Listen:  "127.0.0.1",
 		Port:    "0",
 	}
-	inboundOptions.Users = []inbound.VlessUser{
-		{Username: "test", UUID: userUUID, Flow: "xtls-rprx-vision"},
+	if len(inboundOptions.Users) == 0 {
+		inboundOptions.Users = []inbound.VlessUser{
+			{Username: "test", UUID: userUUID, Flow: "xtls-rprx-vision"},
+		}
 	}
 	in, err := inbound.NewVless(&inboundOptions)
 	if !assert.NoError(t, err) {
@@ -337,6 +339,42 @@ func TestInboundVless_Reality_Grpc(t *testing.T) {
 	t.Run("X25519MLKEM768", func(t *testing.T) {
 		outboundOptions := outboundOptions
 		outboundOptions.RealityOpts.SupportX25519MLKEM768 = true
+		testInboundVless(t, inboundOptions, outboundOptions)
+	})
+}
+
+func TestInboundVless_SplitHTTP_Integration(t *testing.T) {
+	t.Run("Plain-XHTTP-CaddyMode", func(t *testing.T) {
+		inboundOptions := inbound.VlessOption{
+			SplitHTTP: inbound.SplitHTTPOptions{Path: "/x"},
+			Users: []inbound.VlessUser{
+				{Username: "test", UUID: userUUID, Flow: ""},
+			},
+		}
+		outboundOptions := outbound.VlessOption{
+			Network:       "splithttp",
+			ALPN:          []string{"h2"},
+			SplitHTTPOpts: outbound.SplitHTTPOptions{Path: "/x", Mode: "packet-up"},
+		}
+		testInboundVless(t, inboundOptions, outboundOptions)
+	})
+
+	t.Run("TLS-XHTTP", func(t *testing.T) {
+		inboundOptions := inbound.VlessOption{
+			Certificate: tlsCertificate,
+			PrivateKey:  tlsPrivateKey,
+			SplitHTTP:   inbound.SplitHTTPOptions{Path: "/x"},
+			Users: []inbound.VlessUser{
+				{Username: "test", UUID: userUUID, Flow: ""},
+			},
+		}
+		outboundOptions := outbound.VlessOption{
+			TLS:           true,
+			Fingerprint:   tlsFingerprint,
+			ALPN:          []string{"h2"},
+			Network:       "splithttp",
+			SplitHTTPOpts: outbound.SplitHTTPOptions{Path: "/x", Mode: "packet-up"},
+		}
 		testInboundVless(t, inboundOptions, outboundOptions)
 	})
 }

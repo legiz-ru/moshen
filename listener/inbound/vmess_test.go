@@ -17,8 +17,10 @@ func testInboundVMess(t *testing.T, inboundOptions inbound.VmessOption, outbound
 		Listen:  "127.0.0.1",
 		Port:    "0",
 	}
-	inboundOptions.Users = []inbound.VmessUser{
-		{Username: "test", UUID: userUUID, AlterID: 0},
+	if len(inboundOptions.Users) == 0 {
+		inboundOptions.Users = []inbound.VmessUser{
+			{Username: "test", UUID: userUUID, AlterID: 0},
+		}
 	}
 	in, err := inbound.NewVmess(&inboundOptions)
 	if !assert.NoError(t, err) {
@@ -292,4 +294,34 @@ func TestInboundVMess_Reality_Grpc(t *testing.T) {
 		GrpcOpts:          outbound.GrpcOptions{GrpcServiceName: "GunService"},
 	}
 	testInboundVMess(t, inboundOptions, outboundOptions)
+}
+
+func TestInboundVMess_SplitHTTP_Integration(t *testing.T) {
+	t.Run("Plain-XHTTP", func(t *testing.T) {
+		inboundOptions := inbound.VmessOption{
+			SplitHTTP: inbound.SplitHTTPOptions{Path: "/x"},
+		}
+		outboundOptions := outbound.VmessOption{
+			Network:       "splithttp",
+			ALPN:          []string{"h2"},
+			SplitHTTPOpts: outbound.SplitHTTPOptions{Path: "/x", Mode: "packet-up"},
+		}
+		testInboundVMess(t, inboundOptions, outboundOptions)
+	})
+
+	t.Run("TLS-XHTTP", func(t *testing.T) {
+		inboundOptions := inbound.VmessOption{
+			Certificate: tlsCertificate,
+			PrivateKey:  tlsPrivateKey,
+			SplitHTTP:   inbound.SplitHTTPOptions{Path: "/x"},
+		}
+		outboundOptions := outbound.VmessOption{
+			TLS:           true,
+			Fingerprint:   tlsFingerprint,
+			ALPN:          []string{"h2"},
+			Network:       "splithttp",
+			SplitHTTPOpts: outbound.SplitHTTPOptions{Path: "/x", Mode: "packet-up"},
+		}
+		testInboundVMess(t, inboundOptions, outboundOptions)
+	})
 }

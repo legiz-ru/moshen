@@ -11,6 +11,7 @@ import (
 	"github.com/metacubex/mihomo/common/utils"
 	"github.com/metacubex/mihomo/component/ca"
 	"github.com/metacubex/mihomo/component/ech"
+	ws "github.com/metacubex/mihomo/component/transport/websocket"
 	C "github.com/metacubex/mihomo/constant"
 	LC "github.com/metacubex/mihomo/listener/config"
 	"github.com/metacubex/mihomo/listener/reality"
@@ -19,8 +20,8 @@ import (
 	"github.com/metacubex/mihomo/transport/gun"
 	"github.com/metacubex/mihomo/transport/shadowsocks/core"
 	"github.com/metacubex/mihomo/transport/socks5"
+	"github.com/metacubex/mihomo/transport/splithttp"
 	"github.com/metacubex/mihomo/transport/trojan"
-	mihomoVMess "github.com/metacubex/mihomo/transport/vmess"
 
 	"github.com/metacubex/http"
 	"github.com/metacubex/smux"
@@ -75,7 +76,6 @@ func New(config LC.TrojanServer, tunnel C.Tunnel, additions ...inbound.Addition)
 
 	tlsConfig := &tls.Config{Time: ntp.Now}
 	var realityBuilder *reality.Builder
-	var httpServer http.Server
 
 	if config.Certificate != "" && config.PrivateKey != "" {
 		certLoader, err := ca.NewTLSKeyPairLoader(config.Certificate, config.PrivateKey)
@@ -118,29 +118,68 @@ func New(config LC.TrojanServer, tunnel C.Tunnel, additions ...inbound.Addition)
 			return nil, err
 		}
 	}
+
+	// 统一处理 HTTP Mux 逻辑
+	var sharedHttpMux *http.ServeMux
+	if config.WsPath != "" || config.SplitHTTP.Path != "" {
+		sharedHttpMux = http.NewServeMux()
+		tlsConfig.NextProtos = append(tlsConfig.NextProtos, "h2")
+		// ✨ 修正：仅当且仅当配置了 WebSocket 时，才附加 http/1.1 支持
+		if config.WsPath != "" {
+			tlsConfig.NextProtos = append(tlsConfig.NextProtos, "http/1.1")
+		}
+	}
+
 	if config.WsPath != "" {
-		httpMux := http.NewServeMux()
-		httpMux.HandleFunc(config.WsPath, func(w http.ResponseWriter, r *http.Request) {
-			conn, err := mihomoVMess.StreamUpgradedWebsocketConn(w, r)
+		sharedHttpMux.HandleFunc(config.WsPath, func(w http.ResponseWriter, r *http.Request) {
+			conn, err := ws.StreamUpgradedWebsocketConn(w, r)
 			if err != nil {
 				http.Error(w, err.Error(), 500)
 				return
 			}
 			sl.HandleConn(conn, tunnel, additions...)
 		})
-		httpServer.Handler = httpMux
-		tlsConfig.NextProtos = append(tlsConfig.NextProtos, "http/1.1")
 	}
-	if config.GrpcServiceName != "" {
-		httpServer.Handler = gun.NewServerHandler(gun.ServerOption{
-			ServiceName: config.GrpcServiceName,
-			ConnHandler: func(conn net.Conn) {
-				sl.HandleConn(conn, tunnel, additions...)
-			},
-			HttpHandler: httpServer.Handler,
+
+	if config.SplitHTTP.Path != "" {
+		shConfig := &splithttp.Config{
+			Path:                 config.SplitHTTP.Path,
+			Mode:                 config.SplitHTTP.Mode,
+			Headers:              config.SplitHTTP.Headers,
+			XPaddingBytes:        config.SplitHTTP.XPaddingBytes,
+			XPaddingObfsMode:     config.SplitHTTP.XPaddingObfsMode,
+			XPaddingKey:          config.SplitHTTP.XPaddingKey,
+			XPaddingHeader:       config.SplitHTTP.XPaddingHeader,
+			XPaddingPlacement:    config.SplitHTTP.XPaddingPlacement,
+			XPaddingMethod:       config.SplitHTTP.XPaddingMethod,
+			UplinkHTTPMethod:     config.SplitHTTP.UplinkHTTPMethod,
+			NoGRPCHeader:         config.SplitHTTP.NoGRPCHeader,
+			NoSSEHeader:          config.SplitHTTP.NoSSEHeader,
+			SessionPlacement:     config.SplitHTTP.SessionPlacement,
+			SessionKey:           config.SplitHTTP.SessionKey,
+			SeqPlacement:         config.SplitHTTP.SeqPlacement,
+			SeqKey:               config.SplitHTTP.SeqKey,
+			UplinkDataPlacement:  config.SplitHTTP.UplinkDataPlacement,
+			UplinkDataKey:        config.SplitHTTP.UplinkDataKey,
+			UplinkChunkSize:      config.SplitHTTP.UplinkChunkSize,
+			ScMaxEachPostBytes:   config.SplitHTTP.ScMaxEachPostBytes,
+			ScMinPostsIntervalMs: config.SplitHTTP.ScMinPostsIntervalMs,
+			ScMaxBufferedPosts:   int32(config.SplitHTTP.ScMaxBufferedPosts),
+			ScStreamUpServerSecs: config.SplitHTTP.ScStreamUpServerSecs,
+		}
+
+		shHandler := splithttp.NewServerHandler(shConfig, func(conn net.Conn) {
+			sl.HandleConn(conn, tunnel, additions...)
 		})
-		tlsConfig.NextProtos = append([]string{"h2"}, tlsConfig.NextProtos...) // h2 must before http/1.1
+
+		sharedHttpMux.Handle(shConfig.GetNormalizedPath(), shHandler)
 	}
+
+	// ✨ 修复：配置全局 Protocols
+	protocols := new(http.Protocols)
+	protocols.SetHTTP1(true)
+	protocols.SetUnencryptedHTTP2(true) // ✨ 关键：开启 H2C 支持
+	protocols.SetHTTP2(true)
 
 	for _, addr := range strings.Split(config.Listen, ",") {
 		addr := addr
@@ -154,16 +193,38 @@ func New(config LC.TrojanServer, tunnel C.Tunnel, additions ...inbound.Addition)
 			l = realityBuilder.NewListener(l)
 		} else if tlsConfig.GetCertificate != nil {
 			l = tls.NewListener(l, tlsConfig)
-		} else if !config.TrojanSSOption.Enabled {
-			return nil, errors.New("disallow using Trojan without both certificates/reality/ss config")
+		} else if !config.TrojanSSOption.Enabled && config.WsPath == "" && config.SplitHTTP.Path == "" && config.GrpcServiceName == "" {
+			return nil, errors.New("disallow using Trojan without any certificates/reality/ss/transport config")
 		}
 		sl.listeners = append(sl.listeners, l)
 
+		srv := &http.Server{
+			TLSConfig: tlsConfig,
+			Protocols: protocols, // ✨ 注入配置
+		}
+		if sharedHttpMux != nil {
+			srv.Handler = sharedHttpMux
+		}
+
+		if config.GrpcServiceName != "" {
+			srv.Handler = gun.NewServerHandler(gun.ServerOption{
+				ServiceName: config.GrpcServiceName,
+				ConnHandler: func(conn net.Conn) {
+					sl.HandleConn(conn, tunnel, additions...)
+				},
+				HttpHandler: srv.Handler, // 嵌套原有的 Mux
+			})
+		}
+
 		go func() {
-			if httpServer.Handler != nil {
-				_ = httpServer.Serve(l)
+			// 1. 判断是否真的需要启动 HTTP 栈 (WS, SplitHTTP 或 gRPC)
+			// 如果 Handler 为 nil，说明是纯 Raw TCP 协议（测试中的 raw 模式）
+			if srv.Handler != nil {
+				_ = srv.Serve(l)
 				return
 			}
+
+			// 2. 如果是纯 TCP (Trojan 流)，走原始 Accept 循环
 			for {
 				c, err := l.Accept()
 				if err != nil {
@@ -173,6 +234,7 @@ func New(config LC.TrojanServer, tunnel C.Tunnel, additions ...inbound.Addition)
 					continue
 				}
 
+				// ⚠️ 必须传入 additions，否则测试框架无法识别这个入站
 				go sl.HandleConn(c, tunnel, additions...)
 			}
 		}()
@@ -205,7 +267,6 @@ func (l *Listener) AddrList() (addrList []net.Addr) {
 }
 
 func (l *Listener) HandleConn(conn net.Conn, tunnel C.Tunnel, additions ...inbound.Addition) {
-	defer conn.Close()
 
 	if l.pickCipher != nil {
 		conn = l.pickCipher.StreamConn(conn)

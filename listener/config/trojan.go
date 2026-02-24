@@ -17,6 +17,7 @@ type TrojanServer struct {
 	Listen          string
 	Users           []TrojanUser
 	WsPath          string
+	SplitHTTP       SplitHTTPOptions `yaml:"splithttp-opts" json:"splithttp-opts,omitempty"`
 	GrpcServiceName string
 	Certificate     string
 	PrivateKey      string

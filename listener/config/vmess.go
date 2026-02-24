@@ -18,6 +18,7 @@ type VmessServer struct {
 	Listen          string
 	Users           []VmessUser
 	WsPath          string
+	SplitHTTP       SplitHTTPOptions `yaml:"splithttp-opts" json:"splithttp-opts,omitempty"`
 	GrpcServiceName string
 	Certificate     string
 	PrivateKey      string

@@ -19,6 +19,7 @@ type VlessServer struct {
 	Users           []VlessUser
 	Decryption      string
 	WsPath          string
+	SplitHTTP       SplitHTTPOptions `yaml:"splithttp-opts" json:"splithttp-opts,omitempty"`
 	GrpcServiceName string
 	Certificate     string
 	PrivateKey      string
