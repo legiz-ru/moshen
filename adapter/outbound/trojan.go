@@ -16,6 +16,7 @@ import (
 	C "github.com/metacubex/mihomo/constant"
 	"github.com/metacubex/mihomo/transport/gun"
 	"github.com/metacubex/mihomo/transport/shadowsocks/core"
+	"github.com/metacubex/mihomo/transport/splithttp"
 	"github.com/metacubex/mihomo/transport/trojan"
 
 	"github.com/metacubex/http"
@@ -32,6 +33,8 @@ type Trojan struct {
 	gunConfig    *gun.Config
 	transport    *gun.TransportWrap
 
+	splitHTTPTransport *splithttp.TransportWrap
+
 	realityConfig *tlsC.RealityConfig
 	echConfig     *ech.Config
 
@@ -40,24 +43,26 @@ type Trojan struct {
 
 type TrojanOption struct {
 	BasicOption
-	Name              string         `proxy:"name"`
-	Server            string         `proxy:"server"`
-	Port              int            `proxy:"port"`
-	Password          string         `proxy:"password"`
-	ALPN              []string       `proxy:"alpn,omitempty"`
-	SNI               string         `proxy:"sni,omitempty"`
-	SkipCertVerify    bool           `proxy:"skip-cert-verify,omitempty"`
-	Fingerprint       string         `proxy:"fingerprint,omitempty"`
-	Certificate       string         `proxy:"certificate,omitempty"`
-	PrivateKey        string         `proxy:"private-key,omitempty"`
-	UDP               bool           `proxy:"udp,omitempty"`
-	Network           string         `proxy:"network,omitempty"`
-	ECHOpts           ECHOptions     `proxy:"ech-opts,omitempty"`
-	RealityOpts       RealityOptions `proxy:"reality-opts,omitempty"`
-	GrpcOpts          GrpcOptions    `proxy:"grpc-opts,omitempty"`
-	WSOpts            WSOptions      `proxy:"ws-opts,omitempty"`
-	SSOpts            TrojanSSOption `proxy:"ss-opts,omitempty"`
-	ClientFingerprint string         `proxy:"client-fingerprint,omitempty"`
+	Name              string           `proxy:"name"`
+	Server            string           `proxy:"server"`
+	Port              int              `proxy:"port"`
+	Password          string           `proxy:"password"`
+	TLS               bool             `proxy:"tls,omitempty"`
+	ALPN              []string         `proxy:"alpn,omitempty"`
+	SNI               string           `proxy:"sni,omitempty"`
+	SkipCertVerify    bool             `proxy:"skip-cert-verify,omitempty"`
+	Fingerprint       string           `proxy:"fingerprint,omitempty"`
+	Certificate       string           `proxy:"certificate,omitempty"`
+	PrivateKey        string           `proxy:"private-key,omitempty"`
+	UDP               bool             `proxy:"udp,omitempty"`
+	Network           string           `proxy:"network,omitempty"`
+	ECHOpts           ECHOptions       `proxy:"ech-opts,omitempty"`
+	RealityOpts       RealityOptions   `proxy:"reality-opts,omitempty"`
+	GrpcOpts          GrpcOptions      `proxy:"grpc-opts,omitempty"`
+	WSOpts            WSOptions        `proxy:"ws-opts,omitempty"`
+	SSOpts            TrojanSSOption   `proxy:"ss-opts,omitempty"`
+	ClientFingerprint string           `proxy:"client-fingerprint,omitempty"`
+	SplitHTTPOpts     SplitHTTPOptions `proxy:"splithttp-opts,omitempty"`
 }
 
 // TrojanSSOption from https://github.com/p4gefau1t/trojan-go/blob/v0.10.6/tunnel/shadowsocks/config.go#L5
@@ -184,6 +189,20 @@ func (t *Trojan) writeHeaderContext(ctx context.Context, c net.Conn, metadata *C
 
 // DialContext implements C.ProxyAdapter
 func (t *Trojan) DialContext(ctx context.Context, metadata *C.Metadata) (_ C.Conn, err error) {
+	if t.splitHTTPTransport != nil {
+		c, err := t.splitHTTPTransport.DialContext(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("%s connect error: %s", t.addr, err.Error())
+		}
+		defer func(c net.Conn) { safeConnClose(c, err) }(c)
+
+		c, err = t.streamConnContext(ctx, c, metadata)
+		if err != nil {
+			return nil, err
+		}
+		return NewConn(c, t), nil
+	}
+
 	var c net.Conn
 	// gun transport
 	if t.transport != nil {
@@ -225,6 +244,21 @@ func (t *Trojan) ListenPacketContext(ctx context.Context, metadata *C.Metadata) 
 		return nil, err
 	}
 
+	if t.splitHTTPTransport != nil {
+		c, err := t.splitHTTPTransport.DialContext(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("splithttp connect error: %v", err)
+		}
+		defer func(c net.Conn) { safeConnClose(c, err) }(c)
+
+		c, err = t.streamConnContext(ctx, c, metadata)
+		if err != nil {
+			return nil, fmt.Errorf("new trojan client error: %v", err)
+		}
+		pc := trojan.NewPacketConn(c)
+		return newPacketConn(pc, t), err
+	}
+
 	var c net.Conn
 
 	// grpc transport
@@ -245,9 +279,7 @@ func (t *Trojan) ListenPacketContext(ctx context.Context, metadata *C.Metadata) 
 		pc := trojan.NewPacketConn(c)
 		return newPacketConn(pc, t), err
 	}
-	if err = t.ResolveUDP(ctx, metadata); err != nil {
-		return nil, err
-	}
+
 	c, err = t.dialer.DialContext(ctx, "tcp", t.addr)
 	if err != nil {
 		return nil, fmt.Errorf("%s connect error: %w", t.addr, err)
@@ -280,6 +312,9 @@ func (t *Trojan) ProxyInfo() C.ProxyInfo {
 func (t *Trojan) Close() error {
 	if t.transport != nil {
 		return t.transport.Close()
+	}
+	if t.splitHTTPTransport != nil {
+		return t.splitHTTPTransport.Close()
 	}
 	return nil
 }
@@ -368,6 +403,17 @@ func NewTrojan(option TrojanOption) (*Trojan, error) {
 			Host:              option.SNI,
 			ClientFingerprint: option.ClientFingerprint,
 		}
+	} else if option.Network == "splithttp" || option.Network == "xhttp" {
+		transport, err := NewSplitHTTPTransport(
+			t.option.SplitHTTPOpts, t.dialer, t.addr, option.TLS,
+			option.SNI, option.SkipCertVerify, option.Fingerprint,
+			option.Certificate, option.PrivateKey, option.ClientFingerprint,
+			option.ALPN, t.echConfig, t.realityConfig,
+		)
+		if err != nil {
+			return nil, err
+		}
+		t.splitHTTPTransport = transport
 	}
 
 	return t, nil

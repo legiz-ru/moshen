@@ -18,6 +18,7 @@ import (
 	ws "github.com/metacubex/mihomo/component/transport/websocket"
 	C "github.com/metacubex/mihomo/constant"
 	"github.com/metacubex/mihomo/transport/gun"
+	"github.com/metacubex/mihomo/transport/splithttp"
 	"github.com/metacubex/mihomo/transport/vless"
 	"github.com/metacubex/mihomo/transport/vless/encryption"
 
@@ -39,6 +40,8 @@ type Vless struct {
 	gunTLSConfig *tls.Config
 	gunConfig    *gun.Config
 	transport    *gun.TransportWrap
+
+	splitHTTPTransport *splithttp.TransportWrap
 
 	realityConfig *tlsC.RealityConfig
 	echConfig     *ech.Config
@@ -66,6 +69,7 @@ type VlessOption struct {
 	GrpcOpts          GrpcOptions       `proxy:"grpc-opts,omitempty"`
 	WSOpts            WSOptions         `proxy:"ws-opts,omitempty"`
 	WSHeaders         map[string]string `proxy:"ws-headers,omitempty"`
+	SplitHTTPOpts     SplitHTTPOptions  `proxy:"splithttp-opts,omitempty"`
 	SkipCertVerify    bool              `proxy:"skip-cert-verify,omitempty"`
 	Fingerprint       string            `proxy:"fingerprint,omitempty"`
 	Certificate       string            `proxy:"certificate,omitempty"`
@@ -236,6 +240,19 @@ func (v *Vless) streamTLSConn(ctx context.Context, conn net.Conn, isH2 bool) (ne
 
 // DialContext implements C.ProxyAdapter
 func (v *Vless) DialContext(ctx context.Context, metadata *C.Metadata) (_ C.Conn, err error) {
+	if v.splitHTTPTransport != nil {
+		c, err := v.splitHTTPTransport.DialContext(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("%s connect error: %s", v.addr, err.Error())
+		}
+		defer func(c net.Conn) { safeConnClose(c, err) }(c)
+
+		c, err = v.streamConnContext(ctx, c, metadata)
+		if err != nil {
+			return nil, err
+		}
+		return NewConn(c, v), nil
+	}
 	var c net.Conn
 	// gun transport
 	if v.transport != nil {
@@ -368,6 +385,9 @@ func (v *Vless) Close() error {
 	if v.transport != nil {
 		return v.transport.Close()
 	}
+	if v.splitHTTPTransport != nil {
+		return v.splitHTTPTransport.Close()
+	}
 	return nil
 }
 
@@ -400,6 +420,10 @@ func parseVlessAddr(metadata *C.Metadata, xudp bool) *vless.DstAddr {
 }
 
 func NewVless(option VlessOption) (*Vless, error) {
+	if (option.Network == "splithttp" || option.Network == "xhttp") && option.Flow == vless.XRV {
+		return nil, fmt.Errorf("xtls-rprx-vision is strictly incompatible with splithttp/xhttp network")
+	}
+
 	var addons *vless.Addons
 	if len(option.Flow) >= 16 {
 		option.Flow = option.Flow[:16]
@@ -511,6 +535,17 @@ func NewVless(option VlessOption) (*Vless, error) {
 
 		// ✨ 修复：gRPC 传入证书以支持 mTLS
 		v.transport = gun.NewHTTP2Client(dialFn, tlsConfig, v.option.ClientFingerprint, v.option.Certificate, v.option.PrivateKey, v.echConfig, v.realityConfig)
+	case "splithttp", "xhttp":
+		transport, err := NewSplitHTTPTransport(
+			v.option.SplitHTTPOpts, v.dialer, v.addr, option.TLS,
+			option.ServerName, option.SkipCertVerify, option.Fingerprint,
+			option.Certificate, option.PrivateKey, option.ClientFingerprint,
+			option.ALPN, v.echConfig, v.realityConfig,
+		)
+		if err != nil {
+			return nil, err
+		}
+		v.splitHTTPTransport = transport
 	}
 
 	return v, nil

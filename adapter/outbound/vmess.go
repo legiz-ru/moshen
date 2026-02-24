@@ -21,6 +21,7 @@ import (
 	C "github.com/metacubex/mihomo/constant"
 	"github.com/metacubex/mihomo/ntp"
 	"github.com/metacubex/mihomo/transport/gun"
+	"github.com/metacubex/mihomo/transport/splithttp"
 
 	"github.com/metacubex/http"
 	vmess "github.com/metacubex/sing-vmess"
@@ -36,10 +37,11 @@ type Vmess struct {
 	client *vmess.Client
 	option *VmessOption
 
-	// for gun mux
 	gunTLSConfig *tls.Config
 	gunConfig    *gun.Config
 	transport    *gun.TransportWrap
+
+	splitHTTPTransport *splithttp.TransportWrap
 
 	realityConfig *tlsC.RealityConfig
 	echConfig     *ech.Config
@@ -47,33 +49,34 @@ type Vmess struct {
 
 type VmessOption struct {
 	BasicOption
-	Name                string         `proxy:"name"`
-	Server              string         `proxy:"server"`
-	Port                int            `proxy:"port"`
-	UUID                string         `proxy:"uuid"`
-	AlterID             int            `proxy:"alterId"`
-	Cipher              string         `proxy:"cipher"`
-	UDP                 bool           `proxy:"udp,omitempty"`
-	Network             string         `proxy:"network,omitempty"`
-	TLS                 bool           `proxy:"tls,omitempty"`
-	ALPN                []string       `proxy:"alpn,omitempty"`
-	SkipCertVerify      bool           `proxy:"skip-cert-verify,omitempty"`
-	Fingerprint         string         `proxy:"fingerprint,omitempty"`
-	Certificate         string         `proxy:"certificate,omitempty"`
-	PrivateKey          string         `proxy:"private-key,omitempty"`
-	ServerName          string         `proxy:"servername,omitempty"`
-	ECHOpts             ECHOptions     `proxy:"ech-opts,omitempty"`
-	RealityOpts         RealityOptions `proxy:"reality-opts,omitempty"`
-	HTTPOpts            HTTPOptions    `proxy:"http-opts,omitempty"`
-	HTTP2Opts           HTTP2Options   `proxy:"h2-opts,omitempty"`
-	GrpcOpts            GrpcOptions    `proxy:"grpc-opts,omitempty"`
-	WSOpts              WSOptions      `proxy:"ws-opts,omitempty"`
-	PacketAddr          bool           `proxy:"packet-addr,omitempty"`
-	XUDP                bool           `proxy:"xudp,omitempty"`
-	PacketEncoding      string         `proxy:"packet-encoding,omitempty"`
-	GlobalPadding       bool           `proxy:"global-padding,omitempty"`
-	AuthenticatedLength bool           `proxy:"authenticated-length,omitempty"`
-	ClientFingerprint   string         `proxy:"client-fingerprint,omitempty"`
+	Name                string           `proxy:"name"`
+	Server              string           `proxy:"server"`
+	Port                int              `proxy:"port"`
+	UUID                string           `proxy:"uuid"`
+	AlterID             int              `proxy:"alterId"`
+	Cipher              string           `proxy:"cipher"`
+	UDP                 bool             `proxy:"udp,omitempty"`
+	Network             string           `proxy:"network,omitempty"`
+	TLS                 bool             `proxy:"tls,omitempty"`
+	ALPN                []string         `proxy:"alpn,omitempty"`
+	SkipCertVerify      bool             `proxy:"skip-cert-verify,omitempty"`
+	Fingerprint         string           `proxy:"fingerprint,omitempty"`
+	Certificate         string           `proxy:"certificate,omitempty"`
+	PrivateKey          string           `proxy:"private-key,omitempty"`
+	ServerName          string           `proxy:"servername,omitempty"`
+	ECHOpts             ECHOptions       `proxy:"ech-opts,omitempty"`
+	RealityOpts         RealityOptions   `proxy:"reality-opts,omitempty"`
+	HTTPOpts            HTTPOptions      `proxy:"http-opts,omitempty"`
+	HTTP2Opts           HTTP2Options     `proxy:"h2-opts,omitempty"`
+	GrpcOpts            GrpcOptions      `proxy:"grpc-opts,omitempty"`
+	WSOpts              WSOptions        `proxy:"ws-opts,omitempty"`
+	SplitHTTPOpts       SplitHTTPOptions `proxy:"splithttp-opts,omitempty"`
+	PacketAddr          bool             `proxy:"packet-addr,omitempty"`
+	XUDP                bool             `proxy:"xudp,omitempty"`
+	PacketEncoding      string           `proxy:"packet-encoding,omitempty"`
+	GlobalPadding       bool             `proxy:"global-padding,omitempty"`
+	AuthenticatedLength bool             `proxy:"authenticated-length,omitempty"`
+	ClientFingerprint   string           `proxy:"client-fingerprint,omitempty"`
 }
 
 type HTTPOptions struct {
@@ -301,8 +304,20 @@ func (v *Vmess) streamConnContext(ctx context.Context, c net.Conn, metadata *C.M
 	return
 }
 
-// DialContext implements C.ProxyAdapter
 func (v *Vmess) DialContext(ctx context.Context, metadata *C.Metadata) (_ C.Conn, err error) {
+	if v.splitHTTPTransport != nil {
+		c, err := v.splitHTTPTransport.DialContext(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("%s connect error: %s", v.addr, err.Error())
+		}
+		defer func(c net.Conn) { safeConnClose(c, err) }(c)
+
+		c, err = v.streamConnContext(ctx, c, metadata)
+		if err != nil {
+			return nil, err
+		}
+		return NewConn(c, v), nil
+	}
 	var c net.Conn
 	// gun transport
 	if v.transport != nil {
@@ -333,10 +348,22 @@ func (v *Vmess) DialContext(ctx context.Context, metadata *C.Metadata) (_ C.Conn
 	return NewConn(c, v), err
 }
 
-// ListenPacketContext implements C.ProxyAdapter
 func (v *Vmess) ListenPacketContext(ctx context.Context, metadata *C.Metadata) (_ C.PacketConn, err error) {
 	if err = v.ResolveUDP(ctx, metadata); err != nil {
 		return nil, err
+	}
+	if v.splitHTTPTransport != nil {
+		c, err := v.splitHTTPTransport.DialContext(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("splithttp connect error: %v", err)
+		}
+		defer func(c net.Conn) { safeConnClose(c, err) }(c)
+
+		c, err = v.streamConnContext(ctx, c, metadata)
+		if err != nil {
+			return nil, fmt.Errorf("new vmess client error: %v", err)
+		}
+		return v.ListenPacketOnStreamConn(ctx, c, metadata)
 	}
 	var c net.Conn
 	// gun transport
@@ -386,6 +413,9 @@ func (v *Vmess) ProxyInfo() C.ProxyInfo {
 func (v *Vmess) Close() error {
 	if v.transport != nil {
 		return v.transport.Close()
+	}
+	if v.splitHTTPTransport != nil {
+		return v.splitHTTPTransport.Close()
 	}
 	return nil
 }
@@ -509,6 +539,17 @@ func NewVmess(option VmessOption) (*Vmess, error) {
 
 		// ✨ 修复：传递证书以支持 mTLS
 		v.transport = gun.NewHTTP2Client(dialFn, tlsConfig, v.option.ClientFingerprint, v.option.Certificate, v.option.PrivateKey, v.echConfig, v.realityConfig)
+	case "splithttp", "xhttp":
+		transport, err := NewSplitHTTPTransport(
+			v.option.SplitHTTPOpts, v.dialer, v.addr, option.TLS,
+			option.ServerName, option.SkipCertVerify, option.Fingerprint,
+			option.Certificate, option.PrivateKey, option.ClientFingerprint,
+			option.ALPN, v.echConfig, v.realityConfig,
+		)
+		if err != nil {
+			return nil, err
+		}
+		v.splitHTTPTransport = transport
 	}
 
 	return v, nil
