@@ -37,6 +37,9 @@ type Vless struct {
 	// for gun mux
 	gunTransport *gun.Transport
 
+	// for xhttp
+	dialXHTTPConn func() (net.Conn, error)
+
 	realityConfig *tlsC.RealityConfig
 	echConfig     *ech.Config
 }
@@ -265,142 +268,12 @@ func (v *Vless) streamTLSConn(ctx context.Context, conn net.Conn, isH2 bool) (ne
 	return conn, nil
 }
 
-func (v *Vless) dialXHTTPConn() (net.Conn, error) {
-	requestHost := v.option.XHTTPOpts.Host
-	if requestHost == "" {
-		if v.option.ServerName != "" {
-			requestHost = v.option.ServerName
-		} else {
-			requestHost = v.option.Server
-		}
-	}
-
-	cfg := &xhttp.Config{
-		Host:          requestHost,
-		Path:          v.option.XHTTPOpts.Path,
-		Mode:          v.option.XHTTPOpts.Mode,
-		Headers:       v.option.XHTTPOpts.Headers,
-		NoGRPCHeader:  v.option.XHTTPOpts.NoGRPCHeader,
-		XPaddingBytes: v.option.XHTTPOpts.XPaddingBytes,
-	}
-
-	transport := xhttp.NewTransport(
-		func(ctx context.Context) (net.Conn, error) {
-			return v.dialer.DialContext(ctx, "tcp", v.addr)
-		},
-		func(ctx context.Context, raw net.Conn, isH2 bool) (net.Conn, error) {
-			return v.streamTLSConn(ctx, raw, isH2)
-		},
-	)
-	downloadTransport := transport
-
-	if ds := v.option.XHTTPOpts.DownloadSettings; ds != nil {
-		if cfg.Mode == "stream-one" {
-			return nil, fmt.Errorf(`xhttp mode "stream-one" cannot be used with download-settings`)
-		}
-
-		var err error
-
-		downloadServer := lo.FromPtrOr(ds.Server, v.option.Server)
-		downloadPort := lo.FromPtrOr(ds.Port, v.option.Port)
-		downloadTLS := lo.FromPtrOr(ds.TLS, v.option.TLS)
-		downloadALPN := lo.FromPtrOr(ds.ALPN, v.option.ALPN)
-		downloadEchConfig := v.echConfig
-		if ds.ECHOpts != nil {
-			downloadEchConfig, err = ds.ECHOpts.Parse()
-			if err != nil {
-				return nil, err
-			}
-		}
-		downloadRealityCfg := v.realityConfig
-		if ds.RealityOpts != nil {
-			downloadRealityCfg, err = ds.RealityOpts.Parse()
-			if err != nil {
-				return nil, err
-			}
-		}
-		downloadSkipCertVerify := lo.FromPtrOr(ds.SkipCertVerify, v.option.SkipCertVerify)
-		downloadFingerprint := lo.FromPtrOr(ds.Fingerprint, v.option.Fingerprint)
-		downloadCertificate := lo.FromPtrOr(ds.Certificate, v.option.Certificate)
-		downloadPrivateKey := lo.FromPtrOr(ds.PrivateKey, v.option.PrivateKey)
-		downloadServerName := lo.FromPtrOr(ds.ServerName, v.option.ServerName)
-		downloadClientFingerprint := lo.FromPtrOr(ds.ClientFingerprint, v.option.ClientFingerprint)
-
-		downloadAddr := net.JoinHostPort(downloadServer, strconv.Itoa(downloadPort))
-
-		downloadHost := lo.FromPtrOr(ds.Host, v.option.XHTTPOpts.Host)
-		if downloadHost == "" {
-			if downloadServerName != "" {
-				downloadHost = downloadServerName
-			} else {
-				downloadHost = downloadServer
-			}
-		}
-
-		cfg.DownloadConfig = &xhttp.Config{
-			Host:          downloadHost,
-			Path:          lo.FromPtrOr(ds.Path, v.option.XHTTPOpts.Path),
-			Mode:          v.option.XHTTPOpts.Mode,
-			Headers:       lo.FromPtrOr(ds.Headers, v.option.XHTTPOpts.Headers),
-			NoGRPCHeader:  lo.FromPtrOr(ds.NoGRPCHeader, v.option.XHTTPOpts.NoGRPCHeader),
-			XPaddingBytes: lo.FromPtrOr(ds.XPaddingBytes, v.option.XHTTPOpts.XPaddingBytes),
-		}
-
-		downloadTransport = xhttp.NewTransport(
-			func(ctx context.Context) (net.Conn, error) {
-				return v.dialer.DialContext(ctx, "tcp", downloadAddr)
-			},
-			func(ctx context.Context, conn net.Conn, isH2 bool) (net.Conn, error) {
-				if downloadTLS {
-					host, _, _ := net.SplitHostPort(downloadAddr)
-
-					tlsOpts := vmess.TLSConfig{
-						Host:              host,
-						SkipCertVerify:    downloadSkipCertVerify,
-						FingerPrint:       downloadFingerprint,
-						Certificate:       downloadCertificate,
-						PrivateKey:        downloadPrivateKey,
-						ClientFingerprint: downloadClientFingerprint,
-						ECH:               downloadEchConfig,
-						Reality:           downloadRealityCfg,
-						NextProtos:        downloadALPN,
-					}
-
-					if isH2 {
-						tlsOpts.NextProtos = []string{"h2"}
-					}
-
-					if v.option.ServerName != "" {
-						tlsOpts.Host = v.option.ServerName
-					}
-
-					return vmess.StreamTLSConn(ctx, conn, &tlsOpts)
-				}
-
-				return conn, nil
-			},
-		)
-	}
-
-	mode := cfg.EffectiveMode(v.realityConfig != nil)
-	switch mode {
-	case "stream-one":
-		return xhttp.DialStreamOne(cfg, transport)
-	case "stream-up":
-		return xhttp.DialStreamUp(cfg, transport, downloadTransport)
-	case "packet-up":
-		return xhttp.DialPacketUp(cfg, transport, downloadTransport)
-	default:
-		return nil, fmt.Errorf("xhttp mode %s is not implemented yet", mode)
-	}
-}
-
 func (v *Vless) dialContext(ctx context.Context) (c net.Conn, err error) {
 	switch v.option.Network {
-	case "xhttp":
-		return v.dialXHTTPConn()
 	case "grpc": // gun transport
 		return v.gunTransport.Dial()
+	case "xhttp":
+		return v.dialXHTTPConn()
 	default:
 	}
 	return v.dialer.DialContext(ctx, "tcp", v.addr)
@@ -616,6 +489,142 @@ func NewVless(option VlessOption) (*Vless, error) {
 		}
 
 		v.gunTransport = gun.NewTransport(dialFn, tlsConfig, gunConfig)
+	case "xhttp":
+		requestHost := option.XHTTPOpts.Host
+		if requestHost == "" {
+			if option.ServerName != "" {
+				requestHost = option.ServerName
+			} else {
+				requestHost = option.Server
+			}
+		}
+
+		cfg := &xhttp.Config{
+			Host:          requestHost,
+			Path:          option.XHTTPOpts.Path,
+			Mode:          option.XHTTPOpts.Mode,
+			Headers:       option.XHTTPOpts.Headers,
+			NoGRPCHeader:  option.XHTTPOpts.NoGRPCHeader,
+			XPaddingBytes: option.XHTTPOpts.XPaddingBytes,
+		}
+
+		makeTransport := func() http.RoundTripper {
+			return xhttp.NewTransport(
+				func(ctx context.Context) (net.Conn, error) {
+					return v.dialer.DialContext(ctx, "tcp", v.addr)
+				},
+				func(ctx context.Context, raw net.Conn, isH2 bool) (net.Conn, error) {
+					return v.streamTLSConn(ctx, raw, isH2)
+				},
+			)
+		}
+		makeDownloadTransport := makeTransport
+
+		if ds := option.XHTTPOpts.DownloadSettings; ds != nil {
+			if cfg.Mode == "stream-one" {
+				return nil, fmt.Errorf(`xhttp mode "stream-one" cannot be used with download-settings`)
+			}
+
+			downloadServer := lo.FromPtrOr(ds.Server, option.Server)
+			downloadPort := lo.FromPtrOr(ds.Port, option.Port)
+			downloadTLS := lo.FromPtrOr(ds.TLS, option.TLS)
+			downloadALPN := lo.FromPtrOr(ds.ALPN, option.ALPN)
+			downloadEchConfig := v.echConfig
+			if ds.ECHOpts != nil {
+				downloadEchConfig, err = ds.ECHOpts.Parse()
+				if err != nil {
+					return nil, err
+				}
+			}
+			downloadRealityCfg := v.realityConfig
+			if ds.RealityOpts != nil {
+				downloadRealityCfg, err = ds.RealityOpts.Parse()
+				if err != nil {
+					return nil, err
+				}
+			}
+			downloadSkipCertVerify := lo.FromPtrOr(ds.SkipCertVerify, option.SkipCertVerify)
+			downloadFingerprint := lo.FromPtrOr(ds.Fingerprint, option.Fingerprint)
+			downloadCertificate := lo.FromPtrOr(ds.Certificate, option.Certificate)
+			downloadPrivateKey := lo.FromPtrOr(ds.PrivateKey, option.PrivateKey)
+			downloadServerName := lo.FromPtrOr(ds.ServerName, option.ServerName)
+			downloadClientFingerprint := lo.FromPtrOr(ds.ClientFingerprint, option.ClientFingerprint)
+
+			downloadAddr := net.JoinHostPort(downloadServer, strconv.Itoa(downloadPort))
+
+			downloadHost := lo.FromPtrOr(ds.Host, option.XHTTPOpts.Host)
+			if downloadHost == "" {
+				if downloadServerName != "" {
+					downloadHost = downloadServerName
+				} else {
+					downloadHost = downloadServer
+				}
+			}
+
+			cfg.DownloadConfig = &xhttp.Config{
+				Host:          downloadHost,
+				Path:          lo.FromPtrOr(ds.Path, option.XHTTPOpts.Path),
+				Mode:          option.XHTTPOpts.Mode,
+				Headers:       lo.FromPtrOr(ds.Headers, option.XHTTPOpts.Headers),
+				NoGRPCHeader:  lo.FromPtrOr(ds.NoGRPCHeader, option.XHTTPOpts.NoGRPCHeader),
+				XPaddingBytes: lo.FromPtrOr(ds.XPaddingBytes, option.XHTTPOpts.XPaddingBytes),
+			}
+
+			makeDownloadTransport = func() http.RoundTripper {
+				return xhttp.NewTransport(
+					func(ctx context.Context) (net.Conn, error) {
+						return v.dialer.DialContext(ctx, "tcp", downloadAddr)
+					},
+					func(ctx context.Context, conn net.Conn, isH2 bool) (net.Conn, error) {
+						if downloadTLS {
+							host, _, _ := net.SplitHostPort(downloadAddr)
+
+							tlsOpts := vmess.TLSConfig{
+								Host:              host,
+								SkipCertVerify:    downloadSkipCertVerify,
+								FingerPrint:       downloadFingerprint,
+								Certificate:       downloadCertificate,
+								PrivateKey:        downloadPrivateKey,
+								ClientFingerprint: downloadClientFingerprint,
+								ECH:               downloadEchConfig,
+								Reality:           downloadRealityCfg,
+								NextProtos:        downloadALPN,
+							}
+
+							if isH2 {
+								tlsOpts.NextProtos = []string{"h2"}
+							}
+
+							if option.ServerName != "" {
+								tlsOpts.Host = option.ServerName
+							}
+
+							return vmess.StreamTLSConn(ctx, conn, &tlsOpts)
+						}
+
+						return conn, nil
+					},
+				)
+			}
+		}
+
+		xhttpMode := cfg.EffectiveMode(v.realityConfig != nil)
+		switch xhttpMode {
+		case "stream-one":
+			v.dialXHTTPConn = func() (net.Conn, error) {
+				return xhttp.DialStreamOne(cfg, makeTransport())
+			}
+		case "stream-up":
+			v.dialXHTTPConn = func() (net.Conn, error) {
+				return xhttp.DialStreamUp(cfg, makeTransport(), makeDownloadTransport())
+			}
+		case "packet-up":
+			v.dialXHTTPConn = func() (net.Conn, error) {
+				return xhttp.DialPacketUp(cfg, makeTransport(), makeDownloadTransport())
+			}
+		default:
+			return nil, fmt.Errorf("xhttp mode %s is not implemented yet", xhttpMode)
+		}
 	}
 
 	return v, nil
