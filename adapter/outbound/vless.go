@@ -595,8 +595,8 @@ func NewVless(option VlessOption) (*Vless, error) {
 								tlsOpts.NextProtos = []string{"h2"}
 							}
 
-							if option.ServerName != "" {
-								tlsOpts.Host = option.ServerName
+							if downloadServerName != "" {
+								tlsOpts.Host = downloadServerName
 							}
 
 							return vmess.StreamTLSConn(ctx, conn, &tlsOpts)
