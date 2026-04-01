@@ -19,7 +19,7 @@ import (
 )
 
 const (
-	OpSaveNodeState = iota
+	OpSaveNodeState         = iota
 	OpSaveStats
 	OpSavePrefetch
 	OpSaveRanking
@@ -27,35 +27,35 @@ const (
 )
 
 const (
-	KeyTypePrefetch     = "prefetch"
-	KeyTypeNode         = "node"
-	KeyTypeStats        = "stats"
-	KeyTypeRanking      = "ranking"
-	KeyTypeHostFailures = "failures"
+	KeyTypePrefetch         = "prefetch"
+	KeyTypeNode             = "node"
+	KeyTypeStats            = "stats"
+	KeyTypeRanking          = "ranking"
+	KeyTypeHostFailures     = "failures"
 
-	WeightTypeTCP    = "tcp"
-	WeightTypeUDP    = "udp"
-	WeightTypeTCPASN = "tcp_asn"
-	WeightTypeUDPASN = "udp_asn"
+	WeightTypeTCP           = "tcp"
+	WeightTypeUDP           = "udp"
+	WeightTypeTCPASN        = "tcp_asn"
+	WeightTypeUDPASN        = "udp_asn"
 )
 
 const (
-	DefaultMinSampleCount = 2
+	DefaultMinSampleCount   = 2
 
-	MaxTargetsLimit     = 5000
-	MinTargetsLimit     = 500
-	MaxBatchThreshLimit = 300
-	MinBatchThreshLimit = 50
+	MaxTargetsLimit         = 4000
+	MinTargetsLimit         = 500
+	MaxBatchThreshLimit     = 300
+	MinBatchThreshLimit     = 50
 
-	AllowedWeight = 0.4
+	AllowedWeight           = 0.4
 
-	RankMostUsed   = "MostUsed"
-	RankOccasional = "OccasionalUsed"
-	RankRarelyUsed = "RarelyUsed"
+	RankMostUsed            = "MostUsed"
+	RankOccasional          = "OccasionalUsed"
+	RankRarelyUsed          = "RarelyUsed"
 )
 
 var (
-	db               *bbolt.DB
+	db *bbolt.DB
 	bucketSmartStats = []byte("smart_stats")
 
 	globalOperationQueue atomic.TypedValue[[]StoreOperation]
@@ -115,7 +115,7 @@ var CdnASNs = map[string]bool{
 }
 
 type (
-	Store struct{}
+	Store struct {}
 
 	StoreOperation struct {
 		Type   int
@@ -127,17 +127,17 @@ type (
 	}
 
 	StatsRecord struct {
-		Success            int64              `json:"success"`
-		Failure            int64              `json:"failure"`
-		ConnectTime        int64              `json:"connect_time"`
-		Latency            int64              `json:"latency"`
-		LastUsed           int64              `json:"last_used"`
-		Weights            map[string]float64 `json:"weights"`
-		UploadTotal        float64            `json:"upload_total"`
-		DownloadTotal      float64            `json:"download_total"`
-		MaxUploadRate      float64            `json:"max_upload_rate"`
-		MaxDownloadRate    float64            `json:"max_download_rate"`
-		ConnectionDuration float64            `json:"connection_duration"`
+		Success            int64                   `json:"success"`
+		Failure            int64                   `json:"failure"`
+		ConnectTime        int64                   `json:"connect_time"`
+		Latency            int64                   `json:"latency"`
+		LastUsed           int64                   `json:"last_used"`
+		Weights            map[string]float64      `json:"weights"`
+		UploadTotal        float64                 `json:"upload_total"`
+		DownloadTotal      float64                 `json:"download_total"`
+		MaxUploadRate      float64                 `json:"max_upload_rate"`
+		MaxDownloadRate    float64                 `json:"max_download_rate"`
+		ConnectionDuration float64                 `json:"connection_duration"`
 	}
 
 	ModelInput struct {
@@ -178,12 +178,12 @@ type (
 	}
 
 	NodeState struct {
-		Name           string  `json:"name"`
-		FailureCount   int     `json:"failure_count"`
-		LastFailure    int64   `json:"last_failure"`
-		BlockedUntil   int64   `json:"blocked_until"`
-		Degraded       bool    `json:"degraded"`
-		DegradedFactor float64 `json:"degraded_factor"`
+		Name               string         `json:"name"`
+		FailureCount       int            `json:"failure_count"`
+		LastFailure        int64          `json:"last_failure"`
+		BlockedUntil       int64          `json:"blocked_until"`
+		Degraded           bool           `json:"degraded"`
+		DegradedFactor     float64        `json:"degraded_factor"`
 	}
 
 	NodesWithWeights struct {
@@ -205,10 +205,10 @@ type (
 	}
 
 	UnwrapMap struct {
-		TCP    []string `json:"tcp,omitempty"`
-		UDP    []string `json:"udp,omitempty"`
-		RefTCP string   `json:"ref_tcp,omitempty"`
-		RefUDP string   `json:"ref_udp,omitempty"`
+		TCP    []string  `json:"tcp,omitempty"`
+		UDP    []string  `json:"udp,omitempty"`
+		RefTCP string    `json:"ref_tcp,omitempty"`
+		RefUDP string    `json:"ref_udp,omitempty"`
 	}
 )
 
@@ -251,7 +251,7 @@ func formatOperationKey(op *StoreOperation) string {
 }
 
 // 获取有效顶级域名加一二级域名并使用通配符处理
-func GetEffectiveTarget(host string, dstIP string) string {
+func GetEffectiveTarget(host string, dstIP string) (string) {
 	if host == "" {
 		return dstIP
 	}
@@ -467,7 +467,7 @@ func GetSystemMemoryUsage() float64 {
 	return 0.5
 }
 
-func InitQueue() {
+func InitQueue()  {
 	threshold := GetBatchSaveThreshold()
 	emptyQueue := make([]StoreOperation, 0, threshold)
 	replaceGlobalQueue(emptyQueue)

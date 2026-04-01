@@ -15,18 +15,18 @@ import (
 )
 
 var (
-	collectMutex   sync.Mutex
-	smartCollector *DataCollector
+	collectMutex           sync.Mutex
+	smartCollector         *DataCollector
 )
 
 type DataCollector struct {
-	mutex              sync.Mutex
-	sampleCount        int
-	dataPath           string
-	file               *os.File
-	writer             *csv.Writer
-	configured         bool
-	smartCollectorSize int64
+	mutex                  sync.Mutex
+	sampleCount            int
+	dataPath               string
+	file                   *os.File
+	writer                 *csv.Writer
+	configured             bool
+	smartCollectorSize     int64
 }
 
 const (
@@ -42,7 +42,7 @@ func InitCollector(collectSize float64) {
 	}
 
 	smartCollector = &DataCollector{
-		dataPath:           filepath.Join(C.Path.HomeDir(), "smart/smart_weight_data.csv"),
+		dataPath:           filepath.Join(C.Path.HomeDir(), "smart_weight_data.csv"),
 		smartCollectorSize: smartCollectorSize,
 	}
 

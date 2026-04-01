@@ -40,7 +40,7 @@ func CalculateWeight(input *ModelInput, priorityFactor float64) (float64, bool) 
 	maxDownloadRateKB := input.MaxdownloadRate
 	durationMinutes := input.ConnectionDuration
 	lastConnectTimestamp := input.LastUsed
-
+	
 	// 2. 检查样本数量
 	total := success + failure
 	if total < DefaultMinSampleCount {
@@ -201,8 +201,8 @@ func identifyConnectionScene(isUDP bool, latency int64, uploadMB, downloadMB, ma
 	// 流媒体场景
 	if durationMinutes > 1 {
 		downloadThroughput := downloadMB / durationMinutes
-		if (downloadMB > 60 && downloadMB/uploadMB > 3 && maxDownloadRateKB > 2000 && maxDownloadRateKB/maxUploadRateKB > 4 && downloadThroughput > 5) ||
-			(downloadMB > 15 && downloadMB/uploadMB > 3 && maxDownloadRateKB > 1000 && maxDownloadRateKB/maxUploadRateKB > 3 && downloadThroughput > 2) {
+		if ((downloadMB > 60 && downloadMB/uploadMB > 3 && maxDownloadRateKB > 2000 && maxDownloadRateKB/maxUploadRateKB > 4 && downloadThroughput > 5) ||
+			(downloadMB > 15 && downloadMB/uploadMB > 3 && maxDownloadRateKB > 1000 && maxDownloadRateKB/maxUploadRateKB > 3 && downloadThroughput > 2)) {
 			return SceneStreaming
 		}
 	}

@@ -24,11 +24,11 @@ var (
 )
 
 type AtomicStatsRecord struct {
-	success     atomic.Int64
-	failure     atomic.Int64
-	connectTime atomic.Int64
-	latency     atomic.Int64
-	lastUsed    atomic.Int64
+	success         atomic.Int64
+	failure         atomic.Int64
+	connectTime     atomic.Int64
+	latency         atomic.Int64
+	lastUsed        atomic.Int64
 
 	uploadTotal     atomic.Float64
 	downloadTotal   atomic.Float64
@@ -36,13 +36,13 @@ type AtomicStatsRecord struct {
 	maxUploadRate   atomic.Float64
 	maxDownloadRate atomic.Float64
 
-	weights *lru.LruCache[string, float64]
+	weights         *lru.LruCache[string, float64]
 }
 
 type HostStatus struct {
-	FailureCount int   `json:"failure_count"`
-	LastFailure  int64 `json:"last_failure"`
-	LastUsed     int64 `json:"last_used"`
+	FailureCount int    `json:"failure_count"`
+	LastFailure  int64  `json:"last_failure"`
+	LastUsed     int64  `json:"last_used"`
 }
 
 type ActiveTarget struct {
@@ -53,10 +53,9 @@ type ActiveTarget struct {
 }
 
 type NodeRank struct {
-	Name        string
-	Rank        string
-	Weight      float64
-	LastUpdated int64
+	Name   string
+	Rank   string
+	Weight int
 }
 
 type targetMinHeap []ActiveTarget
@@ -89,7 +88,7 @@ func (s *Store) GetOrCreateAtomicRecord(cacheKey string, group, config, target, 
 	}
 
 	record := &AtomicStatsRecord{
-		weights: lru.New[string, float64](lru.WithSize[string, float64](100)),
+		weights:         lru.New[string, float64](lru.WithSize[string, float64](100)),
 	}
 
 	if existingData, err := s.GetStatsForTarget(group, config, target, proxy); err == nil {
@@ -360,11 +359,11 @@ func (s *Store) GetNodeWeightRanking(group, config, testUrl string, proxies []C.
 
 	for node := range allNodes {
 		score := nodeScores[node]
-		percentScore := 0.0
+		percentScore := 0
 		if maxScore > 0 {
-			percentScore = math.Round(float64(score)/float64(maxScore)*100*100) / 100
+			percentScore = int(float64(score) / float64(maxScore) * 100)
 		}
-		result = append(result, NodeRank{Name: node, Weight: percentScore, LastUpdated: time.Now().Unix(), Rank: ""})
+		result = append(result, NodeRank{Name: node, Weight: percentScore, Rank: ""})
 	}
 
 	sort.Slice(result, func(i, j int) bool {
@@ -373,10 +372,7 @@ func (s *Store) GetNodeWeightRanking(group, config, testUrl string, proxies []C.
 		if ai != aj {
 			return ai
 		}
-		if result[i].Weight != result[j].Weight {
-			return result[i].Weight > result[j].Weight
-		}
-		return result[i].Name < result[j].Name
+		return result[i].Weight > result[j].Weight
 	})
 
 	if len(result) > 0 {
@@ -387,37 +383,39 @@ func (s *Store) GetNodeWeightRanking(group, config, testUrl string, proxies []C.
 			}
 		}
 		if aliveCount > 0 {
-			positiveAliveCount := 0
-			for i := 0; i < aliveCount; i++ {
-				if result[i].Weight > 0 {
-					positiveAliveCount++
+			result[0].Rank = RankMostUsed
+			if aliveCount == 2 {
+				if result[1].Weight > 0 {
+					result[1].Rank = RankOccasional
+				} else {
+					result[1].Rank = RankRarelyUsed
 				}
-			}
-
-			if positiveAliveCount > 0 {
-				mostUsedBound := int(float64(positiveAliveCount) * 0.2)
+			} else if aliveCount >= 3 {
+				mostUsedBound := int(float64(aliveCount) * 0.2)
 				if mostUsedBound < 1 {
 					mostUsedBound = 1
 				}
-				if mostUsedBound > positiveAliveCount {
-					mostUsedBound = positiveAliveCount
+				occasionalBound := mostUsedBound + int(float64(aliveCount)*0.5)
+				for i := 1; i < mostUsedBound && i < aliveCount; i++ {
+					if result[i].Weight > 0 {
+						result[i].Rank = RankMostUsed
+					} else {
+						result[i].Rank = RankRarelyUsed
+					}
 				}
-
-				occasionalBound := mostUsedBound + int(float64(positiveAliveCount)*0.5)
-				if occasionalBound > positiveAliveCount {
-					occasionalBound = positiveAliveCount
+				for i := mostUsedBound; i < occasionalBound && i < aliveCount; i++ {
+					if result[i].Weight > 0 {
+						result[i].Rank = RankOccasional
+					} else {
+						result[i].Rank = RankRarelyUsed
+					}
 				}
-
-				for i := 0; i < mostUsedBound; i++ {
-					result[i].Rank = RankMostUsed
-				}
-				for i := mostUsedBound; i < occasionalBound; i++ {
-					result[i].Rank = RankOccasional
-				}
-				for i := occasionalBound; i < positiveAliveCount; i++ {
+				for i := occasionalBound; i < aliveCount; i++ {
 					result[i].Rank = RankRarelyUsed
 				}
-				for i := positiveAliveCount; i < aliveCount; i++ {
+			}
+			for i := 0; i < aliveCount; i++ {
+				if result[i].Rank == "" {
 					result[i].Rank = RankRarelyUsed
 				}
 			}
@@ -560,9 +558,9 @@ func (s *Store) GetBestProxyForTarget(group, config, target, asnNumber string, i
 }
 
 // 获取活跃域名
-func (h targetMinHeap) Len() int            { return len(h) }
-func (h targetMinHeap) Less(i, j int) bool  { return h[i].LastUsed < h[j].LastUsed }
-func (h targetMinHeap) Swap(i, j int)       { h[i], h[j] = h[j], h[i] }
+func (h targetMinHeap) Len() int           { return len(h) }
+func (h targetMinHeap) Less(i, j int) bool { return h[i].LastUsed < h[j].LastUsed }
+func (h targetMinHeap) Swap(i, j int)      { h[i], h[j] = h[j], h[i] }
 func (h *targetMinHeap) Push(x interface{}) { *h = append(*h, x.(ActiveTarget)) }
 func (h *targetMinHeap) Pop() interface{} {
 	old := *h
@@ -728,12 +726,12 @@ func (s *Store) RunPrefetch(group, config string, proxyMap map[string]string) in
 	}
 
 	type asnCacheKey struct {
-		asnNumber string
-		isUDP     bool
+		asnNumber   string
+		isUDP       bool
 	}
 	type asnCacheValue struct {
-		nodes   []string
-		weights []float64
+		nodes       []string
+		weights     []float64
 	}
 
 	asnCache := make(map[asnCacheKey]asnCacheValue)
@@ -753,8 +751,8 @@ func (s *Store) RunPrefetch(group, config string, proxyMap map[string]string) in
 			} else {
 				bestNodes, bestWeights, err = s.GetBestProxyForTarget(group, config, active.Target, active.ASN, active.IsUDP)
 				asnCache[key] = asnCacheValue{
-					nodes:   bestNodes,
-					weights: bestWeights,
+					nodes:      bestNodes,
+					weights:    bestWeights,
 				}
 			}
 		} else {
@@ -831,7 +829,7 @@ func (s *Store) RunPrefetch(group, config string, proxyMap map[string]string) in
 					newW := item.bestWeights[i]
 					if oldW, exists := finalNodeMap[newNode]; exists {
 						// prevent degrade recovery too fast
-						if math.Abs(newW-oldW)/oldW > 0.1 {
+						if math.Abs(newW - oldW) / oldW > 0.1 {
 							finalNodeMap[newNode] = newW
 							needUpdate = true
 						}
@@ -868,8 +866,8 @@ func (s *Store) RunPrefetch(group, config string, proxyMap map[string]string) in
 			if item.asnNumber != "" && !CdnASNs[item.asnNumber] {
 				key := asnCacheKey{item.asnNumber, item.isUDP}
 				asnCache[key] = asnCacheValue{
-					nodes:   sortedNodes,
-					weights: sortedWeights,
+					nodes:      sortedNodes,
+					weights:    sortedWeights,
 				}
 			}
 		}
@@ -1016,42 +1014,42 @@ func (s *Store) GetAllStats(group, config string) (map[string]map[string][]byte,
 
 // 获取缓存中的所有组名
 func (s *Store) GetAllGroupsForConfig(config string) ([]string, error) {
-	groupsMap := make(map[string]bool)
+    groupsMap := make(map[string]bool)
 
-	statsPath := FormatDBKey(KeyTypeStats, config)
-	raw, err := s.GetSubBytesByPath(statsPath)
-	if err == nil {
-		for fullPath := range raw {
-			parts := strings.Split(fullPath, "/")
-			if len(parts) >= 4 {
-				group := parts[3]
-				if group != "" {
-					groupsMap[group] = true
-				}
-			}
-		}
-	} else {
-		scanResults, err2 := s.DBViewPrefixScan(statsPath, -1, false)
-		if err2 != nil {
-			return nil, err2
-		}
-		for path := range scanResults {
-			parts := strings.Split(path, "/")
-			if len(parts) >= 4 {
-				group := parts[3]
-				if group != "" {
-					groupsMap[group] = true
-				}
-			}
-		}
-	}
+    statsPath := FormatDBKey(KeyTypeStats, config)
+    raw, err := s.GetSubBytesByPath(statsPath)
+    if err == nil {
+        for fullPath := range raw {
+            parts := strings.Split(fullPath, "/")
+            if len(parts) >= 4 {
+                group := parts[3]
+                if group != "" {
+                    groupsMap[group] = true
+                }
+            }
+        }
+    } else {
+        scanResults, err2 := s.DBViewPrefixScan(statsPath, -1, false)
+        if err2 != nil {
+            return nil, err2
+        }
+        for path := range scanResults {
+            parts := strings.Split(path, "/")
+            if len(parts) >= 4 {
+                group := parts[3]
+                if group != "" {
+                    groupsMap[group] = true
+                }
+            }
+        }
+    }
 
-	result := make([]string, 0, len(groupsMap))
-	for g := range groupsMap {
-		result = append(result, g)
-	}
+    result := make([]string, 0, len(groupsMap))
+    for g := range groupsMap {
+        result = append(result, g)
+    }
 
-	return result, nil
+    return result, nil
 }
 
 // 通过缓存数据获取组中的节点
@@ -1331,9 +1329,9 @@ func (s *Store) CleanupOldRecords(group, config string) error {
 		}
 
 		type targetInfo struct {
-			time   time.Time
-			value  float64
-			target string
+			time    time.Time
+			value   float64
+			target  string
 		}
 		targetMap := make(map[string]*targetInfo)
 
@@ -1377,9 +1375,9 @@ func (s *Store) CleanupOldRecords(group, config string) error {
 			}
 
 			targetMap[path] = &targetInfo{
-				time:   time.Unix(lastTime, 0),
-				value:  value,
-				target: target,
+				time:    time.Unix(lastTime, 0),
+				value:   value,
+				target:  target,
 			}
 		}
 
@@ -1394,7 +1392,7 @@ func (s *Store) CleanupOldRecords(group, config string) error {
 		}
 
 		totalRecords := len(targetMap)
-		if totalRecords <= maxTargets*2 {
+		if totalRecords <= maxTargets * 2 {
 			continue
 		}
 
@@ -1437,7 +1435,7 @@ func (s *Store) CleanupOldRecords(group, config string) error {
 		dbResultCache.RemoveByKeyPrefix(pathPrefix)
 
 		log.Debugln("[SmartStore] Cleaned up [%d] old [%s] records, group [%s] keeping [%d] valuable and recent data...",
-			deleted, keyType, group, totalRecords-deleted)
+			deleted, keyType, group, totalRecords - deleted)
 	}
 
 	return nil

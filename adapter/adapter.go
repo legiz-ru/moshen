@@ -344,9 +344,6 @@ func (p *Proxy) StatusTest(ctx context.Context, rawURL string) (status uint16, o
 	}
 
 	transport := &http.Transport{
-		DialContext: func(context.Context, string, string) (net.Conn, error) {
-			return instance, nil
-		},
 		MaxIdleConns:          100,
 		IdleConnTimeout:       90 * time.Second,
 		TLSHandshakeTimeout:   10 * time.Second,

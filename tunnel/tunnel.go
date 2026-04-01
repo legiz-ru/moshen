@@ -7,6 +7,7 @@ import (
 	"net"
 	"net/netip"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"strings"
 	"sync"
@@ -65,6 +66,8 @@ var (
 	sniffingEnable    = false
 
 	ruleUpdateCallback = utils.NewCallback[P.RuleProvider]()
+
+	countryCodeRegex = regexp.MustCompile(`(?i)^[A-Z]{2}$`)
 )
 
 type tunnel struct{}
@@ -650,17 +653,32 @@ func match(metadata *C.Metadata, helper C.RuleMatchHelper) (C.Proxy, C.Rule, err
 				continue
 			}
 
+			// set target for Smart group nodes selected
+			if smartRuleType(rule.RuleType()) {
+				if rule.RuleType().String() != "GEOIP" || !countryCodeRegex.MatchString(rule.Payload()) {
+					metadata.SmartTarget = fmt.Sprintf("%s [%s]", rule.RuleType().String(), rule.Payload())
+				}
+			}
+
 			// parse multi-layer nesting
 			passed := false
+			smart := false
 			for adapter := adapter; adapter != nil; adapter = adapter.Unwrap(metadata, false) {
 				if adapter.Type() == C.Pass {
 					passed = true
 					break
 				}
+				if adapter.Type() == C.Smart {
+					smart = true
+				}
 			}
 			if passed {
 				log.Debugln("%s match Pass rule", adapter.Name())
 				continue
+			}
+
+			if !smart {
+				metadata.SmartTarget = ""
 			}
 
 			if metadata.NetWork == C.UDP && !adapter.SupportUDP() {
@@ -673,6 +691,10 @@ func match(metadata *C.Metadata, helper C.RuleMatchHelper) (C.Proxy, C.Rule, err
 	}
 
 	return proxies["DIRECT"], nil, nil
+}
+
+func smartRuleType(rt C.RuleType) bool {
+	return C.SmartRuleTypes[rt]
 }
 
 func getRules(metadata *C.Metadata) []C.Rule {

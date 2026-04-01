@@ -3,6 +3,7 @@ package route
 import (
 	"context"
 	"strconv"
+	"sync"
 	"time"
 
 	"github.com/metacubex/mihomo/adapter/outboundgroup"
@@ -10,6 +11,7 @@ import (
 	"github.com/metacubex/mihomo/component/profile/cachefile"
 	"github.com/metacubex/mihomo/component/smart"
 	C "github.com/metacubex/mihomo/constant"
+	"github.com/metacubex/mihomo/log"
 	"github.com/metacubex/mihomo/tunnel"
 
 	"github.com/metacubex/chi"
@@ -98,73 +100,116 @@ func getGroupDelay(w http.ResponseWriter, r *http.Request) {
 
 func getGroupWeights(w http.ResponseWriter, r *http.Request) {
 	proxy := r.Context().Value(CtxKeyProxy).(C.Proxy)
-
 	smartGroup, ok := proxy.Adapter().(*outboundgroup.Smart)
 	if !ok {
+		log.Debugln("[Smart] Failed to request weight ranking: Not a Smart group (actual type: %T)", proxy.Adapter())
 		render.Status(r, http.StatusBadRequest)
 		render.JSON(w, r, render.M{
-			"message": "Not a Smart group",
 			"weights": []smart.NodeRank{},
+			"error":   "Not a Smart group",
 		})
 		return
 	}
 
-	store := cachefile.GetSmartStore()
-	if store == nil {
+	configName := smartGroup.GetConfigFilename()
+	groupName := smartGroup.Name()
+
+	smartStore := cachefile.GetSmartStore()
+	if smartStore == nil {
 		render.Status(r, http.StatusServiceUnavailable)
 		render.JSON(w, r, render.M{
-			"message": "Smart cache not available",
 			"weights": []smart.NodeRank{},
+			"error":   "Smart cache not available",
 		})
 		return
 	}
 
-	weights, err := store.GetNodeWeightRankingCache(smartGroup.Name(), smartGroup.GetConfigFilename())
+	weights, err := smartStore.GetNodeWeightRankingCache(groupName, configName)
 	if err != nil {
+		log.Warnln("[Smart] Failed to get weight ranking: %s", err.Error())
 		render.Status(r, http.StatusInternalServerError)
 		render.JSON(w, r, render.M{
-			"message": "Failed to get weight ranking: " + err.Error(),
 			"weights": []smart.NodeRank{},
+			"error":   "Failed to get weight ranking: " + err.Error(),
 		})
 		return
 	}
 
 	if len(weights) == 0 {
+		log.Debugln("Policy group %s has no weight data", groupName)
 		render.JSON(w, r, render.M{
-			"message": "No weight data available for the specified group",
 			"weights": []smart.NodeRank{},
+			"message": "No weight data available for the specified group",
 		})
 		return
 	}
 
-	render.JSON(w, r, render.M{"weights": weights})
+	render.JSON(w, r, render.M{
+		"weights": weights,
+	})
 }
 
 func getAllGroupWeights(w http.ResponseWriter, r *http.Request) {
-	store := cachefile.GetSmartStore()
-	if store == nil {
+	smartStore := cachefile.GetSmartStore()
+	if smartStore == nil {
 		render.Status(r, http.StatusServiceUnavailable)
-		render.JSON(w, r, render.M{"weights": map[string][]smart.NodeRank{}})
+		render.JSON(w, r, render.M{
+			"weights": map[string][]smart.NodeRank{},
+			"errors":  map[string]string{},
+			"error":   "Smart cache not available",
+		})
 		return
 	}
 
-	proxies := tunnel.Proxies()
-	result := map[string][]smart.NodeRank{}
-	errors := map[string]string{}
+	result := make(map[string][]smart.NodeRank)
+	errorsMap := make(map[string]string)
 
-	for name, p := range proxies {
+	var (
+		mu  sync.Mutex
+		wg  sync.WaitGroup
+		sem = make(chan struct{}, 5)
+	)
+
+	for _, p := range tunnel.Proxies() {
 		sg, ok := p.Adapter().(*outboundgroup.Smart)
 		if !ok {
 			continue
 		}
-		weights, err := store.GetNodeWeightRankingCache(sg.Name(), sg.GetConfigFilename())
-		if err != nil {
-			errors[name] = err.Error()
-			result[name] = []smart.NodeRank{}
-		} else {
-			result[name] = weights
-		}
+
+		configName := sg.GetConfigFilename()
+		groupName := sg.Name()
+
+		wg.Add(1)
+		sem <- struct{}{}
+		go func(groupName, configName string) {
+			defer wg.Done()
+			defer func() { <-sem }()
+
+			weights, err := smartStore.GetNodeWeightRankingCache(groupName, configName)
+			mu.Lock()
+			defer mu.Unlock()
+			if err != nil {
+				log.Warnln("[Smart] Failed to get weight ranking for group %s: %s", groupName, err.Error())
+				errorsMap[groupName] = err.Error()
+				return
+			}
+			result[groupName] = weights
+		}(groupName, configName)
 	}
 
-	render.JSON(w, r, render.M{"weights": result, "errors": errors})
+	wg.Wait()
+
+	if len(result) == 0 && len(errorsMap) == 0 {
+		render.Status(r, http.StatusInternalServerError)
+		render.JSON(w, r, render.M{
+			"weights": map[string][]smart.NodeRank{},
+			"message": "No Smart groups or no weight data available",
+		})
+		return
+	}
+
+	render.JSON(w, r, render.M{
+		"weights": result,
+		"errors":  errorsMap,
+	})
 }

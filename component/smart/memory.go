@@ -35,12 +35,12 @@ func InitCache() {
 	)
 
 	dbResultCache = lru.New[string, map[string][]byte](
-		lru.WithSize[string, map[string][]byte](globalCacheParams.MaxTargets/4),
+		lru.WithSize[string, map[string][]byte](globalCacheParams.MaxTargets / 4),
 		lru.WithAge[string, map[string][]byte](300),
 	)
 
 	blockedNodesCache = lru.New[string, map[string]bool](
-		lru.WithSize[string, map[string]bool](globalCacheParams.MaxTargets/4),
+		lru.WithSize[string, map[string]bool](globalCacheParams.MaxTargets / 4),
 		lru.WithAge[string, map[string]bool](300),
 	)
 }
@@ -83,7 +83,7 @@ func (s *Store) StorePrefetchResult(group, config string, target string, asnNumb
 			asnPm.RefTCP = targetCacheKey
 		}
 		asnPm.UpdatedTime = time.Now().Unix()
-
+		
 		asnData, asnErr := json.Marshal(asnPm)
 		if asnErr == nil {
 			operations = append(operations, StoreOperation{
@@ -356,7 +356,7 @@ func (s *Store) AdjustCacheParameters() {
 	needAdjust := isFirstRun
 
 	if !isFirstRun {
-		memoryChanged := math.Abs(memoryUsage-globalCacheParams.LastMemoryUsage) > 0.05
+		memoryChanged := math.Abs(memoryUsage - globalCacheParams.LastMemoryUsage) > 0.05
 		needAdjust = memoryChanged || memoryUsage > 0.5
 	}
 
@@ -379,11 +379,11 @@ func (s *Store) AdjustCacheParameters() {
 		globalCacheParams.MaxTargets,
 		globalCacheParams.BatchSaveThreshold)
 
-	targetCache = lru.ResetLRU(targetCache, globalCacheParams.MaxTargets/4)
-	unwrapCache = lru.ResetLRU(unwrapCache, globalCacheParams.MaxTargets/4)
-	recordCache = lru.ResetLRU(recordCache, globalCacheParams.MaxTargets/4)
-	dbResultCache = lru.ResetLRU(dbResultCache, globalCacheParams.MaxTargets/4, lru.WithAge[string, map[string][]byte](300))
-	blockedNodesCache = lru.ResetLRU(blockedNodesCache, globalCacheParams.MaxTargets/4, lru.WithAge[string, map[string]bool](300))
+	targetCache = lru.ResetLRU(targetCache, globalCacheParams.MaxTargets / 4)
+	unwrapCache = lru.ResetLRU(unwrapCache, globalCacheParams.MaxTargets / 4)
+	recordCache = lru.ResetLRU(recordCache, globalCacheParams.MaxTargets / 4)
+	dbResultCache = lru.ResetLRU(dbResultCache, globalCacheParams.MaxTargets / 4, lru.WithAge[string, map[string][]byte](300))
+	blockedNodesCache = lru.ResetLRU(blockedNodesCache, globalCacheParams.MaxTargets / 4, lru.WithAge[string, map[string]bool](300))
 	go s.FlushQueue(true)
 }
 
