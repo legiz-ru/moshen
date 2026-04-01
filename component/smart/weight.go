@@ -27,19 +27,25 @@ type (
 )
 
 // 计算权重
-func CalculateWeight(connSuccess bool, success, failure, connectTime, latency int64, isUDP bool, uploadTotal, downloadTotal, maxUploadRate, maxDownloadRate, connectionDuration float64, lastConnectTimestamp int64) float64 {
-	// 1. 检查样本数量
+func CalculateWeight(input *ModelInput, priorityFactor float64) (float64, bool) {
+	// 1. 数据准备
+	success := input.Success
+	failure := input.Failure
+	connectTime := input.ConnectTime
+	latency := input.Latency
+	isUDP := input.IsUDP
+	uploadMB := input.UploadTotal
+	downloadMB := input.DownloadTotal
+	maxUploadRateKB := input.MaxuploadRate
+	maxDownloadRateKB := input.MaxdownloadRate
+	durationMinutes := input.ConnectionDuration
+	lastConnectTimestamp := input.LastUsed
+	
+	// 2. 检查样本数量
 	total := success + failure
 	if total < DefaultMinSampleCount {
-		return 0
+		return 0, false
 	}
-
-	// 2. 数据准备
-	uploadMB := uploadTotal
-	downloadMB := downloadTotal
-	maxUploadRateKB := maxUploadRate
-	maxDownloadRateKB := maxDownloadRate
-	durationMinutes := connectionDuration
 
 	// 3. 场景识别和参数获取
 	sceneType := identifyConnectionScene(isUDP, latency, uploadMB, downloadMB, maxUploadRateKB, maxDownloadRateKB, durationMinutes)
@@ -54,8 +60,7 @@ func CalculateWeight(connSuccess bool, success, failure, connectTime, latency in
 	// 4. 计算时间衰减因子
 	timeFactor := 1.0
 	if lastConnectTimestamp > 0 {
-		simpleCache := make(map[int64]float64, 1)
-		timeFactor = GetTimeDecayWithCache(lastConnectTimestamp, time.Now().Unix(), params.minDecayFactor, simpleCache)
+		timeFactor = GetTimeDecayWithCache(lastConnectTimestamp, time.Now().Unix(), params.minDecayFactor)
 	}
 
 	// 5. 对所有历史数据应用时间衰减
@@ -70,11 +75,11 @@ func CalculateWeight(connSuccess bool, success, failure, connectTime, latency in
 	}
 
 	// 6. 基础指标计算
-	if connectTime == 0 && !connSuccess {
+	if connectTime == 0 {
 		connectTime = 2000
 	}
 
-	if latency == 0 && !connSuccess {
+	if latency == 0 {
 		latency = 2000
 	}
 
@@ -159,7 +164,7 @@ func CalculateWeight(connSuccess bool, success, failure, connectTime, latency in
 	return baseWeight * (1 +
 		trafficFactor*params.trafficWeight +
 		durationFactor*params.durationWeight +
-		qualityBonus*params.qualityWeight)
+		qualityBonus*params.qualityWeight) * priorityFactor, false
 }
 
 // 识别连接的使用场景类型
@@ -196,8 +201,8 @@ func identifyConnectionScene(isUDP bool, latency int64, uploadMB, downloadMB, ma
 	// 流媒体场景
 	if durationMinutes > 1 {
 		downloadThroughput := downloadMB / durationMinutes
-		if (downloadMB > 60 && downloadMB/uploadMB > 3 && maxDownloadRateKB > 2000 && maxDownloadRateKB/maxUploadRateKB > 4 && downloadThroughput > 5) ||
-			(downloadMB > 15 && downloadMB/uploadMB > 3 && maxDownloadRateKB > 1000 && maxDownloadRateKB/maxUploadRateKB > 3 && downloadThroughput > 2) {
+		if ((downloadMB > 60 && downloadMB/uploadMB > 3 && maxDownloadRateKB > 2000 && maxDownloadRateKB/maxUploadRateKB > 4 && downloadThroughput > 5) ||
+			(downloadMB > 15 && downloadMB/uploadMB > 3 && maxDownloadRateKB > 1000 && maxDownloadRateKB/maxUploadRateKB > 3 && downloadThroughput > 2)) {
 			return SceneStreaming
 		}
 	}

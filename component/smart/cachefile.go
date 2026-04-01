@@ -3,7 +3,6 @@ package smart
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"math/rand"
@@ -40,20 +39,8 @@ func (s *Store) BatchSave(operations []StoreOperation) error {
 		curBatch := operations[start:end]
 		b.Go(fmt.Sprintf("batch-%d", i), func() (struct{}, error) {
 			for _, op := range curBatch {
-				var key string
-
-				switch op.Type {
-				case OpSaveNodeState:
-					key = FormatDBKey(KeyTypeNode, op.Config, op.Group, op.Node)
-				case OpSaveStats:
-					key = FormatDBKey(KeyTypeStats, op.Config, op.Group, op.Target, op.Node)
-				case OpSavePrefetch:
-					key = FormatDBKey(KeyTypePrefetch, op.Config, op.Group, op.Target)
-				case OpSaveRanking:
-					key = FormatDBKey(KeyTypeRanking, op.Config, op.Group)
-				}
-
-				if key != "" && op.Data != nil {
+				key := formatOperationKey(&op)
+				if key != "" {
 					writeMapSync.Store(key, op.Data)
 				}
 			}
@@ -90,107 +77,6 @@ func (s *Store) BatchSave(operations []StoreOperation) error {
 	}
 
 	return err
-}
-
-// 批量保存连接统计数据
-func (s *Store) BatchSaveStats(operations []StoreOperation) error {
-	if len(operations) == 0 {
-		return nil
-	}
-
-	existingOps := getGlobalQueueSnapshot()
-
-	opMap := xsync.NewMap[string, *StoreOperation]()
-
-	for i, op := range existingOps {
-		opKey := fmt.Sprintf("%d:%s:%s:%s:%s", op.Type, op.Group, op.Config, op.Target, op.Node)
-		opMap.Store(opKey, &existingOps[i])
-	}
-
-	concurrency := 2
-	batchSize := 100
-
-	b, _ := batch.New[struct{}](context.Background(), batch.WithConcurrencyNum[struct{}](concurrency))
-
-	for batchStart := 0; batchStart < len(operations); batchStart += batchSize {
-		batchEnd := batchStart + batchSize
-		if batchEnd > len(operations) {
-			batchEnd = len(operations)
-		}
-
-		batchIndex := batchStart
-		b.Go(fmt.Sprintf("batch-%d", batchIndex/batchSize), func() (struct{}, error) {
-			start, end := batchIndex, batchEnd
-			for i := start; i < end; i++ {
-				op := operations[i]
-				lookupKey := fmt.Sprintf("%d:%s:%s:%s:%s", op.Type, op.Group, op.Config, op.Target, op.Node)
-				if op.Type == OpSaveStats {
-					opMap.Compute(lookupKey, func(oldOp *StoreOperation, loaded bool) (*StoreOperation, xsync.ComputeOp) {
-						if !loaded {
-							return &op, xsync.UpdateOp
-						}
-
-						var existingRecord, newRecord StatsRecord
-						if oldOp.Data != nil && op.Data != nil &&
-							json.Unmarshal(oldOp.Data, &existingRecord) == nil &&
-							json.Unmarshal(op.Data, &newRecord) == nil {
-
-							oldWeights := make(map[string]float64, len(existingRecord.Weights))
-							if existingRecord.Weights != nil {
-								for k, v := range existingRecord.Weights {
-									oldWeights[k] = v
-								}
-							}
-
-							existingRecord = newRecord
-
-							if existingRecord.Success > 1000000 {
-								existingRecord.Success = existingRecord.Success / 2
-							}
-							if existingRecord.Failure > 1000000 {
-								existingRecord.Failure = existingRecord.Failure / 2
-							}
-
-							if len(oldWeights) > 0 {
-								if existingRecord.Weights == nil {
-									existingRecord.Weights = oldWeights
-								} else {
-									for k, v := range oldWeights {
-										if _, exists := existingRecord.Weights[k]; !exists {
-											existingRecord.Weights[k] = v
-										}
-									}
-								}
-							}
-
-							mergedData, err := json.Marshal(existingRecord)
-							if err == nil {
-								oldOp.Data = mergedData
-							}
-						}
-						return oldOp, xsync.UpdateOp
-					})
-				} else {
-					opMap.Store(lookupKey, &op)
-				}
-			}
-			return struct{}{}, nil
-		})
-	}
-
-	b.Wait()
-
-	newQueue := make([]StoreOperation, 0, opMap.Size())
-	opMap.Range(func(key string, op *StoreOperation) bool {
-		newQueue = append(newQueue, *op)
-		return true
-	})
-
-	replaceGlobalQueue(newQueue)
-
-	go s.FlushQueue(false)
-
-	return nil
 }
 
 // 刷新队列中的操作到数据库
@@ -235,7 +121,7 @@ func (s *Store) GetSubBytesByPath(prefix string) (map[string][]byte, error) {
 
 	strict := false
 	switch keyType {
-	case KeyTypeNode, KeyTypePrefetch:
+	case KeyTypeNode, KeyTypePrefetch, KeyTypeHostFailures:
 		if len(pathParts) == 5 {
 			strict = true
 		}
@@ -284,6 +170,14 @@ func (s *Store) GetSubBytesByPath(prefix string) (map[string][]byte, error) {
 				key = FormatDBKey(KeyTypeRanking, op.Config, op.Group)
 				result[key] = op.Data
 			}
+		case KeyTypeHostFailures:
+			if op.Type == OpSaveHostFailures && op.Target != "" {
+				if len(pathParts) >= 5 && pathParts[4] != op.Target {
+					continue
+				}
+				key = FormatDBKey(KeyTypeHostFailures, op.Config, op.Group, op.Target)
+				result[key] = op.Data
+			}
 		}
 	}
 
@@ -292,56 +186,33 @@ func (s *Store) GetSubBytesByPath(prefix string) (map[string][]byte, error) {
 	}
 
 	maxResults := -1
-	if configMaxTargets != 1 {
-		dbCount, err := s.DBViewPrefixCount(prefix, strict)
-		if err != nil {
-			return nil, err
-		}
-		if dbCount == 0 {
-			return result, nil
-		}
-
-		if dbCount > configMaxTargets {
-			maxResults = configMaxTargets
-		}
+	if configMaxTargets > 1 {
+		maxResults = configMaxTargets
 	}
 
-	dbResult := make(map[string][]byte)
 	if cached, ok := dbResultCache.Get(prefix); ok && maxResults > 0 {
 		for k, v := range cached {
-			dbResult[k] = v
+			if _, exists := result[k]; !exists {
+				result[k] = v
+			}
 		}
 	} else {
-		var err error
-		dbResult, err = s.DBViewPrefixScan(prefix, maxResults, strict)
+		dbResult, err := s.DBViewPrefixScan(prefix, maxResults, strict)
 		if err != nil {
 			return result, nil
 		}
-		if maxResults > 0 {
+		// KeyTypeStats use other cache
+		if maxResults > 0 && !(keyType == KeyTypeStats && strict) {
 			dbResultCache.Set(prefix, dbResult)
 		}
-	}
-
-	for k, v := range dbResult {
-		if _, exists := result[k]; !exists {
-			result[k] = v
+		for k, v := range dbResult {
+			if _, exists := result[k]; !exists {
+				result[k] = v
+			}
 		}
 	}
 
 	return result, nil
-}
-
-// 删除指定路径前缀的数据
-func (s *Store) DeleteByPath(path string, strict bool) error {
-	return s.DBBatchDeletePrefix(path, strict)
-}
-
-// 删除域名记录
-func (s *Store) DeleteTargetRecords(group, config, target string) {
-	key := FormatDBKey(KeyTypeStats, config, group, target)
-	if err := s.DeleteByPath(key, false); err != nil {
-		return
-	}
 }
 
 // 从数据库获取单个条目
@@ -376,33 +247,6 @@ func (s *Store) DBBatchPutItem(key string, value []byte) error {
 	})
 }
 
-// 计算前缀匹配的记录数量
-func (s *Store) DBViewPrefixCount(prefix string, strict bool) (int, error) {
-	var count int
-	err := db.View(func(tx *bbolt.Tx) error {
-		bucket := tx.Bucket(bucketSmartStats)
-		if bucket == nil {
-			return nil
-		}
-
-		cursor := bucket.Cursor()
-		prefixBytes := []byte(prefix)
-
-		for k, _ := cursor.Seek(prefixBytes); k != nil && bytes.HasPrefix(k, prefixBytes); k, _ = cursor.Next() {
-			if strict && len(k) > len(prefixBytes) && k[len(prefixBytes)] != '/' {
-				continue
-			}
-			count++
-		}
-		return nil
-	})
-	if err != nil {
-		return 0, err
-	}
-
-	return count, nil
-}
-
 // 扫描前缀匹配的记录并随机返回结果
 func (s *Store) DBViewPrefixScan(prefix string, maxResults int, strict bool) (map[string][]byte, error) {
 	result := make(map[string][]byte)
@@ -411,36 +255,11 @@ func (s *Store) DBViewPrefixScan(prefix string, maxResults int, strict bool) (ma
 		return result, nil
 	}
 
-	if maxResults < 0 {
-		err := db.View(func(tx *bbolt.Tx) error {
-			bucket := tx.Bucket(bucketSmartStats)
-			if bucket == nil {
-				return nil
-			}
-			cursor := bucket.Cursor()
-			prefixBytes := []byte(prefix)
-			for k, v := cursor.Seek(prefixBytes); k != nil && bytes.HasPrefix(k, prefixBytes); k, v = cursor.Next() {
-				if strict && len(k) > len(prefixBytes) && k[len(prefixBytes)] != '/' {
-					continue
-				}
-				dataCopy := make([]byte, len(v))
-				copy(dataCopy, v)
-				result[string(k)] = dataCopy
-			}
-			return nil
-		})
-		if err != nil {
-			return nil, err
-		}
-		return result, nil
-	}
-
 	type kv struct {
 		key string
 		val []byte
 	}
-	reservoir := make([]kv, 0, maxResults)
-	total := 0
+	var kvs []kv
 
 	err := db.View(func(tx *bbolt.Tx) error {
 		bucket := tx.Bucket(bucketSmartStats)
@@ -453,19 +272,9 @@ func (s *Store) DBViewPrefixScan(prefix string, maxResults int, strict bool) (ma
 			if strict && len(k) > len(prefixBytes) && k[len(prefixBytes)] != '/' {
 				continue
 			}
-			total++
 			dataCopy := make([]byte, len(v))
 			copy(dataCopy, v)
-			item := kv{key: string(k), val: dataCopy}
-
-			if len(reservoir) < maxResults {
-				reservoir = append(reservoir, item)
-			} else {
-				j := rand.Intn(total)
-				if j < maxResults {
-					reservoir[j] = item
-				}
-			}
+			kvs = append(kvs, kv{key: string(k), val: dataCopy})
 		}
 		return nil
 	})
@@ -474,8 +283,21 @@ func (s *Store) DBViewPrefixScan(prefix string, maxResults int, strict bool) (ma
 		return nil, err
 	}
 
-	for _, item := range reservoir {
-		result[item.key] = item.val
+	if maxResults < 0 || len(kvs) <= maxResults {
+		for _, item := range kvs {
+			result[item.key] = item.val
+		}
+	} else {
+		reservoir := kvs[:maxResults]
+		for i := maxResults; i < len(kvs); i++ {
+			j := rand.Intn(i + 1)
+			if j < maxResults {
+				reservoir[j] = kvs[i]
+			}
+		}
+		for _, item := range reservoir {
+			result[item.key] = item.val
+		}
 	}
 
 	return result, nil
