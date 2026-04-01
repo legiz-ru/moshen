@@ -18,6 +18,7 @@ func connectionRouter() http.Handler {
 	r.Get("/", getConnections)
 	r.Delete("/", closeAllConnections)
 	r.Delete("/{id}", closeConnection)
+	r.Delete("/smart/{id}", setSmartBlock)
 	return r
 }
 
@@ -83,5 +84,18 @@ func closeAllConnections(w http.ResponseWriter, r *http.Request) {
 		_ = c.Close()
 		return true
 	})
+	render.NoContent(w, r)
+}
+
+func setSmartBlock(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+
+	c := statistic.DefaultManager.Get(id)
+	if c == nil {
+		return
+	}
+
+	c.Info().Metadata.SmartBlock = "blocked"
+	_ = c.Close()
 	render.NoContent(w, r)
 }

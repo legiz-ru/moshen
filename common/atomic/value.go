@@ -96,18 +96,18 @@ func (t *TypedValue[T]) Update(f func(old T) (new T)) {
 	}
 
 	switch any(zero).(type) {
-	case map[string]float64:
-		old := t.Load()
-		new := f(old)
-		t.Store(new)
-		return
-	default:
-		for {
+		case map[string]float64:
 			old := t.Load()
 			new := f(old)
-			if t.CompareAndSwap(old, new) {
-				return
+			t.Store(new)
+			return
+		default:
+			for {
+				old := t.Load()
+				new := f(old)
+				if t.CompareAndSwap(old, new) {
+					return
+				}
 			}
-		}
 	}
 }

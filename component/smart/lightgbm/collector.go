@@ -9,27 +9,28 @@ import (
 	"sync"
 	"time"
 
+	"github.com/metacubex/mihomo/component/smart"
 	C "github.com/metacubex/mihomo/constant"
 	"github.com/metacubex/mihomo/log"
 )
 
 var (
-	collectMutex   sync.Mutex
-	smartCollector *DataCollector
+	collectMutex           sync.Mutex
+	smartCollector         *DataCollector
 )
 
 type DataCollector struct {
-	mutex              sync.Mutex
-	sampleCount        int
-	dataPath           string
-	file               *os.File
-	writer             *csv.Writer
-	configured         bool
-	smartCollectorSize int64
+	mutex                  sync.Mutex
+	sampleCount            int
+	dataPath               string
+	file                   *os.File
+	writer                 *csv.Writer
+	configured             bool
+	smartCollectorSize     int64
 }
 
 const (
-	defaultSmartCollectorSize = 64 * 1024 * 1024
+	defaultSmartCollectorSize = 100 * 1024 * 1024
 )
 
 func InitCollector(collectSize float64) {
@@ -41,7 +42,7 @@ func InitCollector(collectSize float64) {
 	}
 
 	smartCollector = &DataCollector{
-		dataPath:           filepath.Join(C.Path.HomeDir(), "smart/smart_weight_data.csv"),
+		dataPath:           filepath.Join(C.Path.HomeDir(), "smart_weight_data.csv"),
 		smartCollectorSize: smartCollectorSize,
 	}
 
@@ -52,8 +53,8 @@ func GetCollector() *DataCollector {
 	return smartCollector
 }
 
-func (c *DataCollector) AddSample(input *ModelInput, metadata *C.Metadata, actualWeight float64, weightSource string) {
-	if c == nil || input == nil {
+func (c *DataCollector) AddSample(input *smart.ModelInput, metadata *C.Metadata, actualWeight float64, weightSource string) {
+	if c == nil {
 		return
 	}
 
