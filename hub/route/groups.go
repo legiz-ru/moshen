@@ -8,6 +8,7 @@ import (
 	"github.com/metacubex/mihomo/adapter/outboundgroup"
 	"github.com/metacubex/mihomo/common/utils"
 	"github.com/metacubex/mihomo/component/profile/cachefile"
+	"github.com/metacubex/mihomo/component/smart"
 	C "github.com/metacubex/mihomo/constant"
 	"github.com/metacubex/mihomo/tunnel"
 
@@ -19,11 +20,13 @@ import (
 func groupRouter() http.Handler {
 	r := chi.NewRouter()
 	r.Get("/", getGroups)
+	r.Get("/weights", getAllGroupWeights)
 
 	r.Route("/{name}", func(r chi.Router) {
 		r.Use(parseProxyName, findProxyByName)
 		r.Get("/", getGroup)
 		r.Get("/delay", getGroupDelay)
+		r.Get("/weights", getGroupWeights)
 	})
 	return r
 }
@@ -91,4 +94,72 @@ func getGroupDelay(w http.ResponseWriter, r *http.Request) {
 	}
 
 	render.JSON(w, r, dm)
+}
+
+func getGroupWeights(w http.ResponseWriter, r *http.Request) {
+	proxy := r.Context().Value(CtxKeyProxy).(C.Proxy)
+	smartGroup, ok := proxy.Adapter().(*outboundgroup.Smart)
+	if !ok {
+		render.Status(r, http.StatusBadRequest)
+		render.JSON(w, r, newError("proxy is not a smart group"))
+		return
+	}
+
+	store := cachefile.GetSmartStore()
+	if store == nil {
+		render.Status(r, http.StatusServiceUnavailable)
+		render.JSON(w, r, newError("smart cache not available"))
+		return
+	}
+
+	weights, err := store.GetNodeWeightRankingCache(proxy.Name(), smartGroup.GetConfigFilename())
+	if err != nil {
+		render.Status(r, http.StatusInternalServerError)
+		render.JSON(w, r, newError(err.Error()))
+		return
+	}
+
+	if len(weights) == 0 {
+		render.JSON(w, r, render.M{
+			"weights": []smart.NodeRank{},
+			"message": "no weight data available",
+		})
+		return
+	}
+
+	render.JSON(w, r, render.M{
+		"weights": weights,
+	})
+}
+
+func getAllGroupWeights(w http.ResponseWriter, r *http.Request) {
+	store := cachefile.GetSmartStore()
+	if store == nil {
+		render.Status(r, http.StatusServiceUnavailable)
+		render.JSON(w, r, newError("smart cache not available"))
+		return
+	}
+
+	allWeights := make(map[string]interface{})
+	errs := make(map[string]string)
+
+	for name, p := range tunnel.Proxies() {
+		smartGroup, ok := p.Adapter().(*outboundgroup.Smart)
+		if !ok {
+			continue
+		}
+
+		weights, err := store.GetNodeWeightRankingCache(name, smartGroup.GetConfigFilename())
+		if err != nil {
+			errs[name] = err.Error()
+			continue
+		}
+
+		allWeights[name] = weights
+	}
+
+	render.JSON(w, r, render.M{
+		"weights": allWeights,
+		"errors":  errs,
+	})
 }
