@@ -4,12 +4,14 @@ import (
 	"bytes"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/url"
 	"strconv"
 	"strings"
 
 	"github.com/metacubex/mihomo/log"
+	Tvless "github.com/metacubex/mihomo/transport/vless"
 )
 
 // ConvertsV2Ray convert V2Ray subscribe proxies data to mihomo proxies config
@@ -48,8 +50,8 @@ func ConvertsV2Ray(buf []byte) ([]map[string]any, error) {
 			hysteria["type"] = scheme
 			hysteria["server"] = urlHysteria.Hostname()
 			hysteria["port"] = urlHysteria.Port()
-			hysteria["sni"] = query.Get("peer")
-			hysteria["obfs"] = query.Get("obfs")
+			resolveSni(hysteria, query)
+			resolveObfs(hysteria, query)
 			if alpn := query.Get("alpn"); alpn != "" {
 				hysteria["alpn"] = strings.Split(alpn, ",")
 			}
@@ -91,11 +93,13 @@ func ConvertsV2Ray(buf []byte) ([]map[string]any, error) {
 			}
 			if ports != "" {
 				hysteria2["ports"] = ports
+			} else if mport := query.Get("mport"); mport != "" {
+				hysteria2["ports"] = mport
 			}
-			hysteria2["obfs"] = query.Get("obfs")
+			resolveObfs(hysteria2, query)
 			hysteria2["obfs-password"] = query.Get("obfs-password")
-			hysteria2["sni"] = query.Get("sni")
-			hysteria2["skip-cert-verify"], _ = strconv.ParseBool(query.Get("insecure"))
+			resolveSni(hysteria2, query)
+			hysteria2["skip-cert-verify"] = true
 			if alpn := query.Get("alpn"); alpn != "" {
 				hysteria2["alpn"] = strings.Split(alpn, ",")
 			}
@@ -146,9 +150,7 @@ func ConvertsV2Ray(buf []byte) ([]map[string]any, error) {
 			if alpn := query.Get("alpn"); alpn != "" {
 				tuic["alpn"] = strings.Split(alpn, ",")
 			}
-			if sni := query.Get("sni"); sni != "" {
-				tuic["sni"] = sni
-			}
+			resolveSni(tuic, query)
 			if query.Get("disable_sni") == "1" {
 				tuic["disable-sni"] = true
 			}
@@ -175,11 +177,9 @@ func ConvertsV2Ray(buf []byte) ([]map[string]any, error) {
 			trojan["port"] = urlTrojan.Port()
 			trojan["password"] = urlTrojan.User.Username()
 			trojan["udp"] = true
-			trojan["skip-cert-verify"], _ = strconv.ParseBool(query.Get("allowInsecure"))
+			trojan["skip-cert-verify"] = true
 
-			if sni := query.Get("sni"); sni != "" {
-				trojan["sni"] = sni
-			}
+			resolveSni(trojan, query)
 			if alpn := query.Get("alpn"); alpn != "" {
 				trojan["alpn"] = strings.Split(alpn, ",")
 			}
@@ -220,12 +220,9 @@ func ConvertsV2Ray(buf []byte) ([]map[string]any, error) {
 			proxies = append(proxies, trojan)
 
 		case "vless":
-			urlVLess, err := url.Parse(line)
+			urlVLess, err := parseUrl(line)
 			if err != nil {
 				continue
-			}
-			if decodedHost, err := tryDecodeBase64([]byte(urlVLess.Host)); err == nil {
-				urlVLess.Host = string(decodedHost)
 			}
 			query := urlVLess.Query()
 			vless := make(map[string]any, 20)
@@ -235,7 +232,10 @@ func ConvertsV2Ray(buf []byte) ([]map[string]any, error) {
 				continue
 			}
 			if flow := query.Get("flow"); flow != "" {
-				vless["flow"] = strings.ToLower(flow)
+				if strings.ToLower(flow) != Tvless.XRV {
+					continue
+				}
+				vless["flow"] = Tvless.XRV
 			}
 			if encryption := query.Get("encryption"); encryption != "" {
 				vless["encryption"] = encryption
@@ -248,7 +248,7 @@ func ConvertsV2Ray(buf []byte) ([]map[string]any, error) {
 			dcBuf, err := tryDecodeBase64([]byte(body))
 			if err != nil {
 				// Xray VMessAEAD share link
-				urlVMess, err := url.Parse(line)
+				urlVMess, err := parseUrl(line)
 				if err != nil {
 					continue
 				}
@@ -294,7 +294,7 @@ func ConvertsV2Ray(buf []byte) ([]map[string]any, error) {
 			vmess["udp"] = true
 			vmess["xudp"] = true
 			vmess["tls"] = false
-			vmess["skip-cert-verify"] = false
+			vmess["skip-cert-verify"] = true
 
 			vmess["cipher"] = "auto"
 			if cipher, ok := values["scy"].(string); ok && cipher != "" {
@@ -368,13 +368,8 @@ func ConvertsV2Ray(buf []byte) ([]map[string]any, error) {
 						if earlyData := query.Get("ed"); earlyData != "" {
 							med, err := strconv.Atoi(earlyData)
 							if err == nil {
-								switch network {
-								case "ws":
-									wsOpts["max-early-data"] = med
-									wsOpts["early-data-header-name"] = "Sec-WebSocket-Protocol"
-								case "httpupgrade":
-									wsOpts["v2ray-http-upgrade-fast-open"] = true
-								}
+								wsOpts["max-early-data"] = med
+								wsOpts["early-data-header-name"] = "Sec-WebSocket-Protocol"
 								query.Del("ed")
 								pathURL.RawQuery = query.Encode()
 								path = pathURL.String()
@@ -383,10 +378,15 @@ func ConvertsV2Ray(buf []byte) ([]map[string]any, error) {
 						if earlyDataHeader := query.Get("eh"); earlyDataHeader != "" {
 							wsOpts["early-data-header-name"] = earlyDataHeader
 						}
+						if network == "httpupgrade" {
+							wsOpts["v2ray-http-upgrade"] = true
+							wsOpts["v2ray-http-upgrade-fast-open"] = true
+						}
 					}
 					wsOpts["path"] = path
 				}
 				wsOpts["headers"] = headers
+				vmess["network"] = "ws"
 				vmess["ws-opts"] = wsOpts
 
 			case "grpc":
@@ -716,7 +716,11 @@ func ConvertsV2Ray(buf []byte) ([]map[string]any, error) {
 	return proxies, nil
 }
 
-func uniqueName(names map[string]int, name string) string {
+func uniqueName(names map[string]int, nameSrc string) string {
+	name := strings.TrimSpace(nameSrc)
+	if name == "" {
+		name = "px"
+	}
 	if index, ok := names[name]; ok {
 		index++
 		names[name] = index
@@ -726,4 +730,53 @@ func uniqueName(names map[string]int, name string) string {
 		names[name] = index
 	}
 	return name
+}
+
+func parseUrl(line string) (*url.URL, error) {
+	urlVLess, err := url.Parse(line)
+	if err != nil {
+		return nil, err
+	}
+	host := urlVLess.Host
+	if !strings.Contains(host, ".") {
+		data := string(DecodeBase64([]byte(host)))
+		i := strings.Split(data, "@")
+		if len(i) != 2 {
+			return nil, errors.New("host format error")
+		}
+		j := strings.Split(i[0], ":")
+		if len(j) == 2 {
+			data = j[1] + "@" + i[1]
+		} else {
+			data = j[0] + "@" + i[1]
+		}
+		line = strings.Replace(line, host, data, 1)
+		urlVLess, err = url.Parse(line)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	return urlVLess, err
+}
+
+func resolveSni(m map[string]any, query url.Values) {
+	if sni := query.Get("sni"); sni != "" {
+		m["sni"] = sni
+	}
+	if peer := query.Get("peer"); peer != "" {
+		m["sni"] = peer
+	}
+}
+
+func resolveObfs(m map[string]any, query url.Values) {
+	obfs := query.Get("obfs")
+	invalidValues := []string{"none", "null", "undefined"}
+	for _, v := range invalidValues {
+		if strings.ToLower(obfs) == v {
+			m["obfs"] = ""
+			return
+		}
+	}
+	m["obfs"] = obfs
 }

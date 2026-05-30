@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/subtle"
 	"encoding/json"
+	"fmt"
 	"net"
 	"os"
 	"path/filepath"
@@ -82,7 +83,7 @@ type Cors struct {
 func (c Cors) Apply(r chi.Router) {
 	r.Use(cors.New(cors.Options{
 		AllowedOrigins:      c.AllowOrigins,
-		AllowedMethods:      []string{"GET", "POST", "PUT", "PATCH", "DELETE"},
+		AllowedMethods:      []string{"GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"},
 		AllowedHeaders:      []string{"Content-Type", "Authorization"},
 		AllowPrivateNetwork: c.AllowPrivateNetwork,
 		MaxAge:              300,
@@ -372,7 +373,7 @@ func traffic(w http.ResponseWriter, r *http.Request) {
 	var wsConn net.Conn
 	if r.Header.Get("Upgrade") == "websocket" {
 		var err error
-		wsConn, _, err = wsUpgrade(r, w)
+		wsConn, _, err = WsUpgrade(r, w)
 		if err != nil {
 			return
 		}
@@ -418,7 +419,7 @@ func memory(w http.ResponseWriter, r *http.Request) {
 	var wsConn net.Conn
 	if r.Header.Get("Upgrade") == "websocket" {
 		var err error
-		wsConn, _, err = wsUpgrade(r, w)
+		wsConn, _, err = WsUpgrade(r, w)
 		if err != nil {
 			return
 		}
@@ -501,7 +502,7 @@ func getLogs(w http.ResponseWriter, r *http.Request) {
 	var wsConn net.Conn
 	if r.Header.Get("Upgrade") == "websocket" {
 		var err error
-		wsConn, _, err = wsUpgrade(r, w)
+		wsConn, _, err = WsUpgrade(r, w)
 		if err != nil {
 			return
 		}
@@ -571,4 +572,26 @@ func getLogs(w http.ResponseWriter, r *http.Request) {
 
 func version(w http.ResponseWriter, r *http.Request) {
 	render.JSON(w, r, render.M{"meta": C.Meta, "version": C.Version})
+}
+
+func StartByPandoraBox(host string, port int, secret string, cors Cors) (serverAddr string) {
+	l, err := inbound.Listen("tcp", fmt.Sprintf("%s:%d", host, port))
+	if err != nil {
+		log.Errorln("External controller listen error: %s", err)
+
+		l, err = inbound.Listen("tcp", host+":0")
+		if err != nil {
+			panic(err)
+		}
+	}
+	serverAddr = l.Addr().String()
+	log.Infoln("Pandora-Box Restful Api Listening At: %s", serverAddr)
+
+	go func() {
+		if err = http.Serve(l, router(false, secret, "", cors)); err != nil {
+			log.Errorln("External controller serve error: %s", err)
+		}
+	}()
+
+	return
 }

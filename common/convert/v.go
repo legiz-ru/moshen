@@ -18,13 +18,15 @@ func handleVShareLink(names map[string]int, url *url.URL, scheme string, proxy m
 		return errors.New("url.Hostname() is empty")
 	}
 	if url.Port() == "" {
-		return errors.New("url.Port() is empty")
+		proxy["port"] = "80"
+	} else {
+		proxy["port"] = url.Port()
 	}
 	proxy["type"] = scheme
 	proxy["server"] = url.Hostname()
-	proxy["port"] = url.Port()
 	proxy["uuid"] = url.User.Username()
 	proxy["udp"] = true
+	proxy["skip-cert-verify"] = true
 	tls := strings.ToLower(query.Get("security"))
 	if strings.HasSuffix(tls, "tls") || tls == "reality" {
 		proxy["tls"] = true
@@ -65,8 +67,6 @@ func handleVShareLink(names map[string]int, url *url.URL, scheme string, proxy m
 	fakeType := strings.ToLower(query.Get("headerType"))
 	if network == "tcp" && fakeType == "http" {
 		network = "http"
-	} else if network == "http" {
-		network = "h2"
 	}
 	proxy["network"] = network
 	switch network {
@@ -102,30 +102,37 @@ func handleVShareLink(names map[string]int, url *url.URL, scheme string, proxy m
 		proxy["h2-opts"] = h2Opts
 
 	case "ws", "httpupgrade":
-		headers := make(map[string]any)
+
 		wsOpts := make(map[string]any)
-		headers["User-Agent"] = RandUserAgent()
-		headers["Host"] = query.Get("host")
-		wsOpts["path"] = query.Get("path")
-		wsOpts["headers"] = headers
+		if path := query.Get("path"); path != "" {
+			wsOpts["path"] = path
+		}
+
+		if host := query.Get("host"); host != "" {
+			headers := make(map[string]any)
+			headers["User-Agent"] = RandUserAgent()
+			headers["Host"] = host
+			wsOpts["headers"] = headers
+		}
 
 		if earlyData := query.Get("ed"); earlyData != "" {
 			med, err := strconv.Atoi(earlyData)
 			if err != nil {
 				return fmt.Errorf("bad WebSocket max early data size: %v", err)
 			}
-			switch network {
-			case "ws":
-				wsOpts["max-early-data"] = med
-				wsOpts["early-data-header-name"] = "Sec-WebSocket-Protocol"
-			case "httpupgrade":
-				wsOpts["v2ray-http-upgrade-fast-open"] = true
-			}
+			wsOpts["max-early-data"] = med
+			wsOpts["early-data-header-name"] = "Sec-WebSocket-Protocol"
 		}
 		if earlyDataHeader := query.Get("eh"); earlyDataHeader != "" {
 			wsOpts["early-data-header-name"] = earlyDataHeader
 		}
 
+		if network == "httpupgrade" {
+			wsOpts["v2ray-http-upgrade"] = true
+			wsOpts["v2ray-http-upgrade-fast-open"] = true
+		}
+
+		proxy["network"] = "ws"
 		proxy["ws-opts"] = wsOpts
 
 	case "grpc":
