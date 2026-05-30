@@ -80,7 +80,7 @@ type Cors struct {
 func (c Cors) Apply(r chi.Router) {
 	r.Use(cors.New(cors.Options{
 		AllowedOrigins:      c.AllowOrigins,
-		AllowedMethods:      []string{"GET", "POST", "PUT", "PATCH", "DELETE"},
+		AllowedMethods:      []string{"GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"},
 		AllowedHeaders:      []string{"Content-Type", "Authorization"},
 		AllowPrivateNetwork: c.AllowPrivateNetwork,
 		MaxAge:              300,
@@ -364,7 +364,7 @@ func traffic(w http.ResponseWriter, r *http.Request) {
 	var wsConn net.Conn
 	if r.Header.Get("Upgrade") == "websocket" {
 		var err error
-		wsConn, _, err = wsUpgrade(r, w)
+		wsConn, _, err = WsUpgrade(r, w)
 		if err != nil {
 			return
 		}
@@ -410,7 +410,7 @@ func memory(w http.ResponseWriter, r *http.Request) {
 	var wsConn net.Conn
 	if r.Header.Get("Upgrade") == "websocket" {
 		var err error
-		wsConn, _, err = wsUpgrade(r, w)
+		wsConn, _, err = WsUpgrade(r, w)
 		if err != nil {
 			return
 		}
@@ -493,7 +493,7 @@ func getLogs(w http.ResponseWriter, r *http.Request) {
 	var wsConn net.Conn
 	if r.Header.Get("Upgrade") == "websocket" {
 		var err error
-		wsConn, _, err = wsUpgrade(r, w)
+		wsConn, _, err = WsUpgrade(r, w)
 		if err != nil {
 			return
 		}
