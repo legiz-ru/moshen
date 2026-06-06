@@ -585,7 +585,7 @@ func StartByPandoraBox(host string, port int, secret string, cors Cors) (serverA
 		}
 	}
 	serverAddr = l.Addr().String()
-	log.Infoln("Pandora-Box Restful Api Listening At: %s", serverAddr)
+	log.Infoln("Prizrak-Box Restful Api Listening At: %s", serverAddr)
 
 	go func() {
 		if err = http.Serve(l, router(false, secret, "", cors)); err != nil {
