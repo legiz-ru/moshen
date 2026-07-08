@@ -575,11 +575,12 @@ func version(w http.ResponseWriter, r *http.Request) {
 }
 
 func StartByPandoraBox(host string, port int, secret string, cors Cors) (serverAddr string) {
-	l, err := inbound.Listen("tcp", fmt.Sprintf("%s:%d", host, port))
+	lc := inbound.NewListenConfig()
+	l, err := lc.Listen(context.Background(), "tcp", fmt.Sprintf("%s:%d", host, port))
 	if err != nil {
 		log.Errorln("External controller listen error: %s", err)
 
-		l, err = inbound.Listen("tcp", host+":0")
+		l, err = lc.Listen(context.Background(), "tcp", host+":0")
 		if err != nil {
 			panic(err)
 		}
