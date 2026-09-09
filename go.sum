@@ -180,6 +180,8 @@ github.com/metacubex/tfo-go v0.0.0-20260623020846-376a77860b8c h1:+2C1UshSLzaogL
 github.com/metacubex/tfo-go v0.0.0-20260623020846-376a77860b8c/go.mod h1:l9oLnLoEXyGZ5RVLsh7QCC5XsouTUyKk4F2nLm2DHLw=
 github.com/metacubex/tls v0.1.8 h1:BHF2payjtxC7wdR3tnq8vl3FAgEQB6/pPjP2tJNTsP4=
 github.com/metacubex/tls v0.1.8/go.mod h1:0XeVdL0cBw+8i5Hqy3lVeP9IyD/LFTq02ExvHM6rzEM=
+github.com/metacubex/utls v0.0.0-20260726054410-2aa631698733 h1:YZaGbI5B/14ILkTgmrAteft67m/5xlRWoeobnNxvejY=
+github.com/metacubex/utls v0.0.0-20260726054410-2aa631698733/go.mod h1:kncGGVhFaoGn5M3pFe3SXhZCzsbCJayNOH4UEqTKTko=
 github.com/metacubex/utls v1.8.7 h1:Cp+yWkNTFkSihETgGWq34hlVFds5HpYWVOR1xovUVTs=
 github.com/metacubex/utls v1.8.7/go.mod h1:kncGGVhFaoGn5M3pFe3SXhZCzsbCJayNOH4UEqTKTko=
 github.com/metacubex/wireguard-go v0.0.0-20250820062549-a6cecdd7f57f h1:FGBPRb1zUabhPhDrlKEjQ9lgIwQ6cHL4x8M9lrERhbk=
@@ -253,10 +255,10 @@ github.com/tailscale/peercred v0.0.0-20250107143737-35a0c7bd7edc h1:24heQPtnFR+y
 github.com/tailscale/peercred v0.0.0-20250107143737-35a0c7bd7edc/go.mod h1:f93CXfllFsO9ZQVq+Zocb1Gp4G5Fz0b0rXHLOzt/Djc=
 github.com/u-root/uio v0.0.0-20230220225925-ffce2a382923 h1:tHNk7XK9GkmKUR6Gh8gVBKXc2MVSZ4G/NnWLtzw4gNA=
 github.com/u-root/uio v0.0.0-20230220225925-ffce2a382923/go.mod h1:eLL9Nub3yfAho7qB0MzZizFhTU2QkLeoVsWdHtDW264=
-github.com/vernesong/leaves v0.0.0-20260629081247-2a1c022f37d0 h1:nUA4Mk3K64DfnpHfhJHrbDf5j0R7mYgPJ3W81vFopAg=
-github.com/vernesong/leaves v0.0.0-20260629081247-2a1c022f37d0/go.mod h1:Ndptw/K8n2twzGNEgCBSaEdTjT3EWU5YvJ476KwDKGw=
 github.com/ulikunitz/xz v0.5.15 h1:9DNdB5s+SgV3bQ2ApL10xRc35ck0DuIX/isZvIk+ubY=
 github.com/ulikunitz/xz v0.5.15/go.mod h1:nbz6k7qbPmH4IRqmfOplQw/tblSgqTqBwxkY0oWt/14=
+github.com/vernesong/leaves v0.0.0-20260629081247-2a1c022f37d0 h1:nUA4Mk3K64DfnpHfhJHrbDf5j0R7mYgPJ3W81vFopAg=
+github.com/vernesong/leaves v0.0.0-20260629081247-2a1c022f37d0/go.mod h1:Ndptw/K8n2twzGNEgCBSaEdTjT3EWU5YvJ476KwDKGw=
 github.com/vishvananda/netlink v1.1.0/go.mod h1:cTgwzPIzzgDAYoQrMm0EdrjRUBkTqKYppBueQtXaqoE=
 github.com/vishvananda/netns v0.0.0-20191106174202-0a2b9b5464df/go.mod h1:JP3t17pCcGlemwknint6hfoeCVQrEMVwxRLRjXpq+BU=
 github.com/vishvananda/netns v0.0.0-20210104183010-2eb08e3e575f/go.mod h1:DD4vA1DwXk04H54A1oHXtwZmA0grkVMdPxx/VGLCah0=
